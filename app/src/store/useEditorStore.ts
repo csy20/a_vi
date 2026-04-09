@@ -103,6 +103,7 @@ interface EditorStore {
 }
 
 const MIN_TOTAL_FRAMES = 150
+const MAX_HISTORY = 50
 
 const createId = (prefix: string) => {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -146,7 +147,7 @@ const applyCommittedTree = (
   overrides: Partial<Pick<EditorStore, 'selectedClip' | 'totalFrames'>> = {}
 ) => {
   const snapshot = cloneTracks(nextTree)
-  const history = [...state.history.slice(0, state.historyIndex + 1), snapshot]
+  const history = [...state.history.slice(0, state.historyIndex + 1), snapshot].slice(-MAX_HISTORY)
 
   return {
     compositionTree: snapshot,

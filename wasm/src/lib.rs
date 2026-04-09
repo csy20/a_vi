@@ -1,4 +1,4 @@
-use wasm_bindgen::prelude::*;
+use wasm_bindgen::{prelude::*, JsValue};
 
 // ── Panic hook ────────────────────────────────────────────────────────────────
 // Redirects Rust panics to browser console.error so debugging is bearable.
@@ -13,8 +13,11 @@ pub fn init_panic_hook() {
 /// Uses ITU-R BT.601 luma coefficients: Y = 0.299R + 0.587G + 0.114B.
 /// Alpha channel is preserved unchanged.
 #[wasm_bindgen]
-pub fn grayscale(mut pixels: Vec<u8>) -> Vec<u8> {
-    assert!(pixels.len() % 4 == 0, "pixel buffer length must be a multiple of 4 (RGBA)");
+pub fn grayscale(mut pixels: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+    if pixels.len() % 4 != 0 {
+        return Err(JsValue::from_str("pixel buffer length must be a multiple of 4 (RGBA)"));
+    }
+
     for chunk in pixels.chunks_exact_mut(4) {
         let luma = (0.299 * chunk[0] as f32
                   + 0.587 * chunk[1] as f32
@@ -25,34 +28,40 @@ pub fn grayscale(mut pixels: Vec<u8>) -> Vec<u8> {
         chunk[2] = luma;
         // chunk[3] = alpha — untouched
     }
-    pixels
+    Ok(pixels)
 }
 
 // ── Invert ────────────────────────────────────────────────────────────────────
 /// Invert every colour channel (255 - value). Alpha is preserved.
 #[wasm_bindgen]
-pub fn invert(mut pixels: Vec<u8>) -> Vec<u8> {
-    assert!(pixels.len() % 4 == 0, "pixel buffer length must be a multiple of 4 (RGBA)");
+pub fn invert(mut pixels: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+    if pixels.len() % 4 != 0 {
+        return Err(JsValue::from_str("pixel buffer length must be a multiple of 4 (RGBA)"));
+    }
+
     for chunk in pixels.chunks_exact_mut(4) {
         chunk[0] = 255 - chunk[0];
         chunk[1] = 255 - chunk[1];
         chunk[2] = 255 - chunk[2];
     }
-    pixels
+    Ok(pixels)
 }
 
 // ── Brightness ────────────────────────────────────────────────────────────────
 /// Multiply each colour channel by `factor` and clamp to [0, 255].
 /// factor > 1.0 brightens, 0.0 < factor < 1.0 darkens. Alpha preserved.
 #[wasm_bindgen]
-pub fn brightness(mut pixels: Vec<u8>, factor: f32) -> Vec<u8> {
-    assert!(pixels.len() % 4 == 0, "pixel buffer length must be a multiple of 4 (RGBA)");
+pub fn brightness(mut pixels: Vec<u8>, factor: f32) -> Result<Vec<u8>, JsValue> {
+    if pixels.len() % 4 != 0 {
+        return Err(JsValue::from_str("pixel buffer length must be a multiple of 4 (RGBA)"));
+    }
+
     for chunk in pixels.chunks_exact_mut(4) {
         chunk[0] = ((chunk[0] as f32 * factor).round() as i32).clamp(0, 255) as u8;
         chunk[1] = ((chunk[1] as f32 * factor).round() as i32).clamp(0, 255) as u8;
         chunk[2] = ((chunk[2] as f32 * factor).round() as i32).clamp(0, 255) as u8;
     }
-    pixels
+    Ok(pixels)
 }
 
 // ── Luma statistics ───────────────────────────────────────────────────────────
@@ -85,8 +94,11 @@ pub fn frame_luma_stats(pixels: &[u8]) -> Vec<f32> {
 // ── Sepia ─────────────────────────────────────────────────────────────────────
 /// Classic sepia tone filter. Alpha preserved.
 #[wasm_bindgen]
-pub fn sepia(mut pixels: Vec<u8>) -> Vec<u8> {
-    assert!(pixels.len() % 4 == 0, "pixel buffer length must be a multiple of 4 (RGBA)");
+pub fn sepia(mut pixels: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+    if pixels.len() % 4 != 0 {
+        return Err(JsValue::from_str("pixel buffer length must be a multiple of 4 (RGBA)"));
+    }
+
     for chunk in pixels.chunks_exact_mut(4) {
         let r = chunk[0] as f32;
         let g = chunk[1] as f32;
@@ -95,5 +107,5 @@ pub fn sepia(mut pixels: Vec<u8>) -> Vec<u8> {
         chunk[1] = ((0.349 * r + 0.686 * g + 0.168 * b).round() as i32).clamp(0, 255) as u8;
         chunk[2] = ((0.272 * r + 0.534 * g + 0.131 * b).round() as i32).clamp(0, 255) as u8;
     }
-    pixels
+    Ok(pixels)
 }

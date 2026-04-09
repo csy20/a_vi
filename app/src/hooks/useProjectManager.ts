@@ -41,7 +41,6 @@ export function useProjectManager() {
     const createFreshProject = async () => {
       const editorState = useEditorStore.getState()
       const project = await createProject({
-        user_id: userId,
         composition_tree: editorState.compositionTree,
         total_frames: editorState.totalFrames,
         fps: editorState.fps,

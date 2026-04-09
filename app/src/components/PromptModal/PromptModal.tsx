@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { useEditorStore, type Track } from '../../store/useEditorStore'
+import { useAuth } from '../../lib/authContext'
 import { toast } from '../../lib/toastStore'
 import { hasUsableVideoClips } from '../../lib/editorUtils'
 
@@ -17,7 +18,6 @@ export interface PromptRequest {
 export interface PromptResponse {
   success: boolean
   explanation: string
-  systemPrompt: string
   modifiedComposition: {
     tracks: Track[]
     totalFrames: number
@@ -45,6 +45,7 @@ export const PromptModal: React.FC = () => {
     fps,
     setProposedComposition,
   } = useEditorStore()
+  const { session } = useAuth()
 
   const [prompt,   setPrompt]   = useState('')
   const [status,   setStatus]   = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
@@ -83,6 +84,12 @@ export const PromptModal: React.FC = () => {
       toast.error('Prompt too long (max 1000 characters)')
       return
     }
+
+    const accessToken = session?.access_token
+    if (!accessToken) {
+      toast.error('Sign in again to use AI editing')
+      return
+    }
     
     if (status === 'loading') return
 
@@ -90,9 +97,8 @@ export const PromptModal: React.FC = () => {
     setResponse(null)
     setErrorMsg('')
 
-    // Sanitize prompt (prevent injection attacks)
     const sanitizedPrompt = trimmedPrompt
-      .replace(/[<>]/g, '') // Remove HTML tags
+      .replace(/[<>]/g, '')
       .substring(0, 1000)
 
     const body: PromptRequest = {
@@ -104,11 +110,17 @@ export const PromptModal: React.FC = () => {
     try {
       const res = await fetch('/api/prompt', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
         body: JSON.stringify(body),
       })
 
-      if (!res.ok) throw new Error(`API error ${res.status}`)
+      if (!res.ok) {
+        const errorPayload = await res.json().catch(() => null) as { error?: string } | null
+        throw new Error(errorPayload?.error || `API error ${res.status}`)
+      }
 
       const data: PromptResponse = await res.json()
       
@@ -126,7 +138,7 @@ export const PromptModal: React.FC = () => {
       setStatus('error')
       toast.error('Failed to generate AI response')
     }
-  }, [prompt, status, currentSelection, compositionTree, totalFrames, fps, canUseAi])
+  }, [prompt, status, currentSelection, compositionTree, totalFrames, fps, canUseAi, session])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -405,36 +417,6 @@ export const PromptModal: React.FC = () => {
                 ))
               )}
             </div>
-
-            {/* System prompt (collapsible peek) */}
-            <details style={{ background: '#161616' }}>
-              <summary
-                style={{
-                  padding: '6px 14px',
-                  fontSize: 11,
-                  color: '#555',
-                  cursor: 'pointer',
-                  userSelect: 'none',
-                }}
-              >
-                System prompt sent to LLM
-              </summary>
-              <pre
-                style={{
-                  padding: '8px 14px',
-                  fontSize: 10,
-                  color: '#555',
-                  fontFamily: 'monospace',
-                  whiteSpace: 'pre-wrap',
-                  margin: 0,
-                  maxHeight: 120,
-                  overflowY: 'auto',
-                }}
-              >
-                {response.systemPrompt}
-              </pre>
-            </details>
-
             {/* Apply button */}
             <div
               style={{

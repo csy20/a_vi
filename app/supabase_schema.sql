@@ -93,6 +93,9 @@ CREATE INDEX idx_projects_updated_at ON public.projects(updated_at DESC);
 -- =====================================================
 -- 3. ASSETS TABLE (for video/audio assets)
 -- =====================================================
+-- NOTE: Assets are currently stored in browser IndexedDB (assetService.ts),
+-- NOT in this table. This table is a placeholder for future cloud storage.
+-- Do not query this table from the app until cloud upload is implemented.
 CREATE TABLE IF NOT EXISTS public.assets (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,

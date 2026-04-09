@@ -33,7 +33,6 @@ export interface Project {
 }
 
 export interface CreateProjectData {
-  user_id: string
   name?: string
   description?: string
   fps?: number
@@ -46,7 +45,6 @@ export async function createProject(data: CreateProjectData): Promise<Project> {
   const { data: project, error } = await supabase
     .from('projects')
     .insert({
-      user_id: data.user_id,
       name: data.name || 'Untitled Project',
       description: data.description || null,
       fps: data.fps || 30,
@@ -108,7 +106,9 @@ export async function updateProjectComposition(
   totalFrames?: number,
   fps?: number
 ): Promise<void> {
-  const updates: any = {
+  const updates: Partial<Pick<Project, 'composition_tree' | 'total_frames' | 'fps'>> & {
+    composition_tree: Track[]
+  } = {
     composition_tree: compositionTree,
   }
 

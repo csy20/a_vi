@@ -24,6 +24,27 @@ interface UseWasmReturn {
   api:    WasmApi | null
 }
 
+const normalizeWasmError = (error: unknown): Error => {
+  if (error instanceof Error) {
+    return error
+  }
+
+  if (typeof error === 'string') {
+    return new Error(error)
+  }
+
+  return new Error('WASM operation failed')
+}
+
+const wrapWasmCall = <T extends (...args: any[]) => any>(fn: T): T =>
+  (((...args: Parameters<T>) => {
+    try {
+      return fn(...args)
+    } catch (error) {
+      throw normalizeWasmError(error)
+    }
+  }) as T)
+
 /**
  * Asynchronously loads and initialises the avi-wasm WebAssembly module.
  * The module is loaded once and cached via ref — safe to call from any component.
@@ -44,12 +65,18 @@ export const useWasm = (): UseWasmReturn => {
         await mod.default()
 
         if (!cancelled) {
-          apiRef.current = mod as unknown as WasmApi
+          apiRef.current = {
+            grayscale: wrapWasmCall(mod.grayscale),
+            invert: wrapWasmCall(mod.invert),
+            brightness: wrapWasmCall(mod.brightness),
+            sepia: wrapWasmCall(mod.sepia),
+            frame_luma_stats: wrapWasmCall(mod.frame_luma_stats),
+          }
           setStatus('ready')
         }
       } catch (e) {
         if (!cancelled) {
-          setError(e instanceof Error ? e.message : String(e))
+          setError(normalizeWasmError(e).message)
           setStatus('error')
         }
       }

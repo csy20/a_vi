@@ -52,6 +52,14 @@ const getSupportedMimeType = () => {
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
 
+const withTimeout = <T>(promise: Promise<T>, ms: number, label: string): Promise<T> =>
+  Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`Timeout: ${label}`)), ms)
+    ),
+  ])
+
 const waitForImage = (src: string) =>
   new Promise<HTMLImageElement>((resolve, reject) => {
     const image = new Image()
@@ -103,7 +111,7 @@ const loadMediaResources = async (
         }
 
         if (clip.mediaType === 'image') {
-          const image = await waitForImage(clip.assetUrl)
+          const image = await withTimeout(waitForImage(clip.assetUrl), 8000, clip.label)
           return { kind: 'image', clip, image }
         }
 
@@ -115,7 +123,7 @@ const loadMediaResources = async (
           element.muted = false
           element.playsInline = true
 
-          await waitForMediaReady(element)
+          await withTimeout(waitForMediaReady(element), 8000, clip.label)
 
           let source: MediaElementAudioSourceNode | null = null
           try {
@@ -135,7 +143,7 @@ const loadMediaResources = async (
           element.preload = 'auto'
           element.muted = false
 
-          await waitForMediaReady(element)
+          await withTimeout(waitForMediaReady(element), 8000, clip.label)
 
           let source: MediaElementAudioSourceNode | null = null
           try {
@@ -342,23 +350,39 @@ export async function exportEditedVideo({
     }
   }
 
+  let blob: Blob
+
   try {
     await renderFrame()
+    recorder.stop()
+    blob = await stopPromise
+  } catch (error) {
+    if (recorder.state !== 'inactive') {
+      recorder.stop()
+    }
+
+    try {
+      await stopPromise
+    } catch {
+      // Ignore recorder shutdown errors and preserve the original failure.
+    }
+
+    throw error
   } finally {
     resources.forEach((resource) => {
       if ('element' in resource) {
         resource.element.pause()
       }
     })
+
+    exportStream.getTracks().forEach((track) => track.stop())
+    canvasStream.getTracks().forEach((track) => track.stop())
+    destination.stream.getTracks().forEach((track) => track.stop())
+
+    if (audioContext.state !== 'closed') {
+      await audioContext.close()
+    }
   }
-
-  recorder.stop()
-  const blob = await stopPromise
-
-  exportStream.getTracks().forEach((track) => track.stop())
-  canvasStream.getTracks().forEach((track) => track.stop())
-  destination.stream.getTracks().forEach((track) => track.stop())
-  await audioContext.close()
 
   const now = new Date()
   const filename = `a-vi-export-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}.webm`

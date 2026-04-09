@@ -39,11 +39,13 @@ export const WasmPanel: React.FC = () => {
   const { status, error, api } = useWasm()
   const [result,   setResult]   = useState<BenchResult | null>(null)
   const [running,  setRunning]  = useState<FilterName | null>(null)
+  const [runtimeError, setRuntimeError] = useState<string | null>(null)
 
   const run = useCallback(async (filter: FilterName) => {
     if (!api || running) return
     setRunning(filter)
     setResult(null)
+    setRuntimeError(null)
 
     // Yield to the browser so the button state renders before we block the thread
     await new Promise<void>((r) => setTimeout(r, 0))
@@ -51,23 +53,40 @@ export const WasmPanel: React.FC = () => {
     const frame  = makeTestFrame(FRAME_W, FRAME_H)
     const before = parseStats(api.frame_luma_stats(frame))
 
-    const t0 = performance.now()
-    switch (filter) {
-      case 'grayscale':  api.grayscale(frame);         break
-      case 'invert':     api.invert(frame);            break
-      case 'brightness': api.brightness(frame, 1.5);   break
-      case 'sepia':      api.sepia(frame);             break
+    try {
+      const t0 = performance.now()
+      let filteredFrame: Uint8Array
+
+      switch (filter) {
+        case 'grayscale':
+          filteredFrame = api.grayscale(frame)
+          break
+        case 'invert':
+          filteredFrame = api.invert(frame)
+          break
+        case 'brightness':
+          filteredFrame = api.brightness(frame, 1.5)
+          break
+        case 'sepia':
+          filteredFrame = api.sepia(frame)
+          break
+      }
+
+      const timeMs = performance.now() - t0
+      const after = parseStats(api.frame_luma_stats(filteredFrame))
+      const pixelCount = FRAME_W * FRAME_H
+      const throughputMp = pixelCount / 1_000_000 / (timeMs / 1000)
+
+      console.log(`[wasm] ${filter} — ${timeMs.toFixed(2)}ms | ${throughputMp.toFixed(0)} MP/s`)
+
+      setResult({ filter, timeMs, pixelCount, throughputMp, before, after })
+    } catch (wasmError) {
+      const message = wasmError instanceof Error ? wasmError.message : String(wasmError)
+      console.error(`[wasm] ${filter} failed`, wasmError)
+      setRuntimeError(message)
+    } finally {
+      setRunning(null)
     }
-    const timeMs = performance.now() - t0
-
-    const after       = parseStats(api.frame_luma_stats(frame))
-    const pixelCount  = FRAME_W * FRAME_H
-    const throughputMp = pixelCount / 1_000_000 / (timeMs / 1000)
-
-    console.log(`[wasm] ${filter} — ${timeMs.toFixed(2)}ms | ${throughputMp.toFixed(0)} MP/s`)
-
-    setResult({ filter, timeMs, pixelCount, throughputMp, before, after })
-    setRunning(null)
   }, [api, running])
 
   const isReady = status === 'ready'
@@ -144,9 +163,9 @@ export const WasmPanel: React.FC = () => {
       </div>
 
       {/* ── Error message ── */}
-      {error && (
+      {(error || runtimeError) && (
         <span style={{ fontSize: 11, color: '#e94560', fontFamily: 'monospace' }}>
-          {error}
+          {runtimeError || error}
         </span>
       )}
 
