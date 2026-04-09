@@ -1,4 +1,5 @@
 import { type Track } from '../store/useEditorStore'
+import { deleteMediaBlob, loadMediaBlob, restoreMediaBlob, saveMediaBlob } from './mediaStorage'
 
 export interface Asset {
   id: string
@@ -10,6 +11,10 @@ export interface Asset {
   playback_url: string
   thumbnail_url: string | null
   created_at: string
+  mime_type: string | null
+  width: number | null
+  height: number | null
+  status: 'ready' | 'missing'
 }
 
 interface StoredAssetRecord {
@@ -21,7 +26,11 @@ interface StoredAssetRecord {
   duration_seconds: number | null
   thumbnail_url: string | null
   created_at: string
-  blob: Blob
+  mime_type: string | null
+  width: number | null
+  height: number | null
+  status: 'ready' | 'missing'
+  blob?: Blob
 }
 
 export interface UploadAssetOptions {
@@ -35,7 +44,6 @@ const DB_VERSION = 1
 const STORE_NAME = 'assets'
 
 let dbPromise: Promise<IDBDatabase> | null = null
-const objectUrlCache = new Map<string, string>()
 
 const requestToPromise = <T>(request: IDBRequest<T>) =>
   new Promise<T>((resolve, reject) => {
@@ -72,33 +80,20 @@ const getDatabase = async () => {
   return dbPromise
 }
 
-const getPlaybackUrl = (record: StoredAssetRecord) => {
-  const cached = objectUrlCache.get(record.id)
-  if (cached) return cached
-
-  const url = URL.createObjectURL(record.blob)
-  objectUrlCache.set(record.id, url)
-  return url
-}
-
-const revokePlaybackUrl = (assetId: string) => {
-  const cached = objectUrlCache.get(assetId)
-  if (!cached) return
-
-  URL.revokeObjectURL(cached)
-  objectUrlCache.delete(assetId)
-}
-
-const toAsset = (record: StoredAssetRecord): Asset => ({
+const toAsset = (record: StoredAssetRecord, playbackUrl: string): Asset => ({
   id: record.id,
   project_id: record.project_id,
   name: record.name,
   file_type: record.file_type,
   file_size: record.file_size,
   duration_seconds: record.duration_seconds,
-  playback_url: getPlaybackUrl(record),
+  playback_url: playbackUrl,
   thumbnail_url: record.thumbnail_url,
   created_at: record.created_at,
+  mime_type: record.mime_type ?? null,
+  width: record.width ?? null,
+  height: record.height ?? null,
+  status: playbackUrl ? 'ready' : 'missing',
 })
 
 const createAssetId = () => {
@@ -117,10 +112,27 @@ const detectFileType = (file: File): Asset['file_type'] => {
   throw new Error('Unsupported file type. Please upload video, audio, or image files.')
 }
 
-const detectMediaDuration = (file: File, fileType: Asset['file_type']) =>
-  new Promise<number | null>((resolve) => {
+const detectMediaMetadata = (file: File, fileType: Asset['file_type']) =>
+  new Promise<{ durationSeconds: number | null; width: number | null; height: number | null }>((resolve) => {
     if (fileType === 'image') {
-      resolve(null)
+      const image = new Image()
+      const objectUrl = URL.createObjectURL(file)
+
+      image.onload = () => {
+        URL.revokeObjectURL(objectUrl)
+        resolve({
+          durationSeconds: null,
+          width: image.naturalWidth || null,
+          height: image.naturalHeight || null,
+        })
+      }
+
+      image.onerror = () => {
+        URL.revokeObjectURL(objectUrl)
+        resolve({ durationSeconds: null, width: null, height: null })
+      }
+
+      image.src = objectUrl
       return
     }
 
@@ -129,14 +141,18 @@ const detectMediaDuration = (file: File, fileType: Asset['file_type']) =>
 
     media.preload = 'metadata'
     media.onloadedmetadata = () => {
-      const duration = Number.isFinite(media.duration) ? media.duration : null
+      const durationSeconds = Number.isFinite(media.duration) ? media.duration : null
       URL.revokeObjectURL(objectUrl)
-      resolve(duration)
+      resolve({
+        durationSeconds,
+        width: fileType === 'video' ? (Number.isFinite((media as HTMLVideoElement).videoWidth) ? (media as HTMLVideoElement).videoWidth : null) : null,
+        height: fileType === 'video' ? (Number.isFinite((media as HTMLVideoElement).videoHeight) ? (media as HTMLVideoElement).videoHeight : null) : null,
+      })
     }
 
     media.onerror = () => {
       URL.revokeObjectURL(objectUrl)
-      resolve(null)
+      resolve({ durationSeconds: null, width: null, height: null })
     }
 
     media.src = objectUrl
@@ -151,6 +167,35 @@ const getAssetRecord = async (assetId: string): Promise<StoredAssetRecord | null
   return record ?? null
 }
 
+const putAssetRecord = async (record: StoredAssetRecord): Promise<void> => {
+  const database = await getDatabase()
+  const transaction = database.transaction(STORE_NAME, 'readwrite')
+  transaction.objectStore(STORE_NAME).put(record)
+  await transactionToPromise(transaction)
+}
+
+const resolveAssetPlaybackUrl = async (record: StoredAssetRecord): Promise<string | null> => {
+  const indexedPlaybackUrl = await loadMediaBlob(record.id)
+  if (indexedPlaybackUrl) {
+    return indexedPlaybackUrl
+  }
+
+  if (!(record.blob instanceof Blob)) {
+    return null
+  }
+
+  const playbackUrl = await restoreMediaBlob(record.id, record.blob)
+  const { blob: _legacyBlob, ...metadataRecord } = record
+  await putAssetRecord({
+    ...metadataRecord,
+    mime_type: metadataRecord.mime_type ?? null,
+    width: metadataRecord.width ?? null,
+    height: metadataRecord.height ?? null,
+    status: 'ready',
+  })
+  return playbackUrl
+}
+
 export async function uploadAsset({
   file,
   projectId,
@@ -163,15 +208,18 @@ export async function uploadAsset({
   const fileType = detectFileType(file)
   onProgress?.(15)
 
-  const [durationSeconds, thumbnailUrl] = await Promise.all([
-    detectMediaDuration(file, fileType),
+  const [{ durationSeconds, width, height }, thumbnailUrl] = await Promise.all([
+    detectMediaMetadata(file, fileType),
     fileType === 'video' ? generateVideoThumbnail(file) : Promise.resolve(null),
   ])
 
   onProgress?.(65)
 
+  const assetId = createAssetId()
+  const playbackUrl = await saveMediaBlob(assetId, file)
+
   const record: StoredAssetRecord = {
-    id: createAssetId(),
+    id: assetId,
     project_id: projectId,
     name: file.name,
     file_type: fileType,
@@ -179,16 +227,21 @@ export async function uploadAsset({
     duration_seconds: durationSeconds,
     thumbnail_url: thumbnailUrl,
     created_at: new Date().toISOString(),
-    blob: file,
+    mime_type: file.type || null,
+    width,
+    height,
+    status: 'ready',
   }
 
-  const database = await getDatabase()
-  const transaction = database.transaction(STORE_NAME, 'readwrite')
-  transaction.objectStore(STORE_NAME).put(record)
-  await transactionToPromise(transaction)
+  try {
+    await putAssetRecord(record)
+  } catch (error) {
+    await deleteMediaBlob(assetId)
+    throw error
+  }
 
   onProgress?.(100)
-  return toAsset(record)
+  return toAsset(record, playbackUrl)
 }
 
 export async function getProjectAssets(projectId: string): Promise<Asset[]> {
@@ -198,8 +251,14 @@ export async function getProjectAssets(projectId: string): Promise<Asset[]> {
   const records = await requestToPromise(index.getAll(projectId))
   await transactionToPromise(transaction)
 
-  return (records ?? [])
-    .map(toAsset)
+  const assets = await Promise.all(
+    (records ?? []).map(async (record) => {
+      const playbackUrl = await resolveAssetPlaybackUrl(record)
+      return toAsset(record, playbackUrl ?? '')
+    })
+  )
+
+  return assets
     .sort((left, right) => right.created_at.localeCompare(left.created_at))
 }
 
@@ -209,7 +268,7 @@ export async function deleteAsset(assetId: string): Promise<void> {
   transaction.objectStore(STORE_NAME).delete(assetId)
   await transactionToPromise(transaction)
 
-  revokePlaybackUrl(assetId)
+  await deleteMediaBlob(assetId)
 }
 
 export async function deleteProjectAssets(projectId: string): Promise<void> {
@@ -221,10 +280,10 @@ export async function deleteProjectAssets(projectId: string): Promise<void> {
 
   for (const record of records ?? []) {
     store.delete(record.id)
-    revokePlaybackUrl(record.id)
   }
 
   await transactionToPromise(transaction)
+  await Promise.all((records ?? []).map((record) => deleteMediaBlob(record.id)))
 }
 
 export async function resolveTracksWithAssets(tracks: Track[], fps: number): Promise<Track[]> {
@@ -234,11 +293,31 @@ export async function resolveTracksWithAssets(tracks: Track[], fps: number): Pro
     )
   )
 
-  const records = await Promise.all(assetIds.map((assetId) => getAssetRecord(assetId)))
+  const assetPayloads = await Promise.all(
+    assetIds.map(async (assetId) => {
+      const record = await getAssetRecord(assetId)
+      const playbackUrl = record
+        ? await resolveAssetPlaybackUrl(record)
+        : await loadMediaBlob(assetId)
+
+      return {
+        assetId,
+        record,
+        playbackUrl,
+      }
+    })
+  )
+
   const recordMap = new Map(
-    records
+    assetPayloads
+      .map((entry) => entry.record)
       .filter((record): record is StoredAssetRecord => Boolean(record))
       .map((record) => [record.id, record])
+  )
+  const playbackUrlMap = new Map(
+    assetPayloads
+      .filter((entry): entry is { assetId: string; record: StoredAssetRecord | null; playbackUrl: string } => Boolean(entry.playbackUrl))
+      .map((entry) => [entry.assetId, entry.playbackUrl])
   )
 
   return tracks.map((track) => ({
@@ -247,7 +326,8 @@ export async function resolveTracksWithAssets(tracks: Track[], fps: number): Pro
       if (!clip.assetId) return { ...clip }
 
       const record = recordMap.get(clip.assetId)
-      if (!record) {
+      const playbackUrl = record ? playbackUrlMap.get(clip.assetId) : undefined
+      if (!playbackUrl) {
         return {
           ...clip,
           assetUrl: undefined,
@@ -257,11 +337,11 @@ export async function resolveTracksWithAssets(tracks: Track[], fps: number): Pro
 
       const mediaDurationFrames =
         clip.mediaDurationFrames ??
-        (record.duration_seconds != null ? Math.max(1, Math.round(record.duration_seconds * fps)) : undefined)
+        (record?.duration_seconds != null ? Math.max(1, Math.round(record.duration_seconds * fps)) : undefined)
 
       return {
         ...clip,
-        assetUrl: getPlaybackUrl(record),
+        assetUrl: playbackUrl,
         isMissingAsset: false,
         mediaDurationFrames,
       }

@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { validateClip } from '../lib/clipValidation'
 
 export interface Clip {
   id: string
@@ -71,6 +72,7 @@ interface EditorStore {
 
   // UI flags
   isPromptOpen: boolean
+  timelineResetVersion: number
 
   // Actions
   setPlayheadPosition: (frame: number) => void
@@ -229,6 +231,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   selectedClip: null,
   isPlaying: false,
   isPromptOpen: false,
+  timelineResetVersion: 0,
   totalFrames: computeTotalFrames(INITIAL_SNAPSHOT),
   fps: 30,
 
@@ -273,6 +276,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         currentSelection: null,
         selectedClip: null,
         isPlaying: false,
+        timelineResetVersion: 0,
       }
     }),
 
@@ -443,6 +447,28 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       return false
     }
 
+    // FIX: 1 - refuse split operations that would create invalid preview trim ranges.
+    const mediaMid = clip.mediaStart != null
+      ? clip.mediaStart + (splitFrame - clip.startFrame)
+      : undefined
+
+    const leftCandidate: Clip = {
+      ...clip,
+      endFrame: splitFrame - 1,
+      mediaEnd: mediaMid != null ? mediaMid - 1 : clip.mediaEnd,
+    }
+
+    const rightCandidate: Clip = {
+      ...clip,
+      id: createId('clip'),
+      startFrame: splitFrame,
+      mediaStart: mediaMid ?? clip.mediaStart,
+    }
+
+    if (!validateClip(leftCandidate) || !validateClip(rightCandidate)) {
+      return false
+    }
+
     set((currentState) => {
       let nextSelectedClipId: string | null = null
       const nextTree = currentState.compositionTree.map((item) => {
@@ -452,21 +478,21 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         if (clipIndex === -1) return item
 
         const originalClip = item.clips[clipIndex]
-        const mediaMid = originalClip.mediaStart != null
+        const splitMediaMid = originalClip.mediaStart != null
           ? originalClip.mediaStart + (splitFrame - originalClip.startFrame)
           : undefined
 
         const leftClip: Clip = {
           ...originalClip,
           endFrame: splitFrame - 1,
-          mediaEnd: mediaMid != null ? mediaMid - 1 : originalClip.mediaEnd,
+          mediaEnd: splitMediaMid != null ? splitMediaMid - 1 : originalClip.mediaEnd,
         }
 
         const rightClip: Clip = {
           ...originalClip,
           id: createId('clip'),
           startFrame: splitFrame,
-          mediaStart: mediaMid ?? originalClip.mediaStart,
+          mediaStart: splitMediaMid ?? originalClip.mediaStart,
         }
         nextSelectedClipId = rightClip.id
 
@@ -494,7 +520,13 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           return {
             ...track,
             clips: track.clips.map((clip) =>
-              clip.id === clipId ? resolveTrimmedClip(clip, newStart, newEnd) : clip
+              clip.id === clipId
+                ? (() => {
+                    // FIX: 1 - keep invalid trims from reaching the preview renderer.
+                    const trimmedClip = resolveTrimmedClip(clip, newStart, newEnd)
+                    return validateClip(trimmedClip) ? trimmedClip : clip
+                  })()
+                : clip
             ),
           }
         }),

@@ -1,15 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { AbsoluteFill, Html5Audio, Img, Html5Video, Sequence, interpolate, useCurrentFrame } from 'remotion'
 import { type Clip, type Track } from '../../store/useEditorStore'
-
-const getMediaTrimProps = (clip: Clip) => {
-  const trimBefore = clip.mediaStart && clip.mediaStart > 0 ? clip.mediaStart : undefined
-  const trimAfter = clip.mediaDurationFrames != null && clip.mediaEnd != null
-    ? Math.max(clip.mediaDurationFrames - clip.mediaEnd - 1, 0)
-    : undefined
-
-  return { trimBefore, trimAfter }
-}
+import { getSafeMediaTrimProps, validateClip } from '../../lib/clipValidation'
 
 const getMediaFailureMessage = (clip: Clip, error?: string) => {
   if (error && error.trim().length > 0) {
@@ -174,6 +166,10 @@ const ImageClipRenderer: React.FC<{ clip: Clip; opacity: number }> = ({ clip, op
 }
 
 const ClipRenderer: React.FC<{ clip: Clip }> = ({ clip }) => {
+  if (!validateClip(clip)) {
+    return null
+  }
+
   const opacity = clip.opacity ?? 1
 
   if (clip.mediaType === 'text' && clip.text) {
@@ -223,7 +219,7 @@ const ClipRenderer: React.FC<{ clip: Clip }> = ({ clip }) => {
     )
   }
 
-  const trimProps = getMediaTrimProps(clip)
+  const trimProps = getSafeMediaTrimProps(clip)
 
   if (clip.mediaType === 'video' && clip.assetUrl) {
     return (
@@ -267,15 +263,20 @@ export const TrackPreviewComposition: React.FC<TrackPreviewProps> = ({
   const frame = useCurrentFrame()
   const progress = frame / Math.max(totalFrames - 1, 1)
   const glowOpacity = isProposed ? interpolate(frame % 60, [0, 30, 60], [0.4, 1, 0.4]) : 0
+  // FIX: 1 - validate clips before preview render so bad trim values never hit Remotion.
+  const safeTracks = tracks.map((track) => ({
+    ...track,
+    clips: track.clips.filter(validateClip),
+  }))
 
-  const activeClips = tracks.flatMap((track) =>
+  const activeClips = safeTracks.flatMap((track) =>
     track.clips.filter((clip) => frame >= clip.startFrame && frame <= clip.endFrame)
   )
 
   const trackRowHeight = 18
-  const miniTimelineHeight = tracks.length * trackRowHeight + 16
+  const miniTimelineHeight = safeTracks.length * trackRowHeight + 16
 
-  const hasMediaClips = tracks.some((track) =>
+  const hasMediaClips = safeTracks.some((track) =>
     track.clips.some((clip) => clip.assetUrl || clip.isMissingAsset || (clip.mediaType === 'text' && clip.text))
   )
 
@@ -289,7 +290,7 @@ export const TrackPreviewComposition: React.FC<TrackPreviewProps> = ({
     >
       {hasMediaClips && (
         <AbsoluteFill style={{ zIndex: 0 }}>
-          {tracks.map((track) =>
+          {safeTracks.map((track) =>
             track.clips
               .filter((clip) => clip.assetUrl || clip.isMissingAsset || (clip.mediaType === 'text' && clip.text))
               .map((clip) => (
@@ -366,7 +367,7 @@ export const TrackPreviewComposition: React.FC<TrackPreviewProps> = ({
             border: '1px solid #252525',
           }}
         >
-          {tracks.map((track, trackIndex) => (
+          {safeTracks.map((track, trackIndex) => (
             <div
               key={track.id}
               style={{

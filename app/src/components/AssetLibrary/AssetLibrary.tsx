@@ -112,6 +112,11 @@ export const AssetLibrary: React.FC<AssetLibraryProps> = ({ projectId }) => {
 
   // ── Add to timeline ──────────────────────────────────────────────────────
   const handleAddToTimeline = async (asset: Asset) => {
+    if (asset.status === 'missing' || !asset.playback_url) {
+      toast.warning('This asset is missing locally. Re-upload it from the Assets panel to use it again.')
+      return
+    }
+
     const trackType = TRACK_TYPE_MAP[asset.file_type] || 'overlay'
 
     // Detect duration for video/audio
