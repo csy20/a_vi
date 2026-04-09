@@ -1,0 +1,21 @@
+{
+  "name": "a-vi",
+  "private": true,
+  "workspaces": [
+    "app",
+    "api"
+  ],
+  "scripts": {
+    "dev:app": "npm --workspace=app run dev",
+    "dev:api": "npm --workspace=api run dev",
+    "dev": "concurrently \"npm run dev:app\" \"npm run dev:api\"",
+    "build:app": "npm --workspace=app run build",
+    "build:api": "npm --workspace=api run build"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.101.1"
+  }
+}

@@ -1,0 +1,555 @@
+import { create } from 'zustand'
+
+export interface Clip {
+  id: string
+  trackId: string
+  startFrame: number
+  endFrame: number
+  label: string
+  color: string
+  // Media reference fields
+  assetUrl?: string
+  assetId?: string
+  mediaType?: 'video' | 'audio' | 'image' | 'text'
+  mediaStart?: number
+  mediaEnd?: number
+  mediaDurationFrames?: number
+  opacity?: number
+  text?: string
+  fontSize?: number
+  fontColor?: string
+  isMissingAsset?: boolean
+}
+
+export interface Track {
+  id: string
+  name: string
+  type: 'video' | 'audio' | 'overlay'
+  clips: Clip[]
+}
+
+export interface FrameRange {
+  startFrame: number
+  endFrame: number
+}
+
+export interface SelectedClip {
+  trackId: string
+  clipId: string
+}
+
+interface AssetClipInput {
+  assetUrl: string
+  assetId: string
+  mediaType: 'video' | 'audio' | 'image'
+  label: string
+  durationFrames: number
+}
+
+interface HydratedProjectState {
+  tracks: Track[]
+  totalFrames: number
+  fps: number
+}
+
+interface EditorStore {
+  // Playback
+  playheadPosition: number
+  currentSelection: FrameRange | null
+  selectedClip: SelectedClip | null
+  totalFrames: number
+  fps: number
+  isPlaying: boolean
+
+  // Compositions
+  compositionTree: Track[]
+  proposedComposition: Track[] | null
+
+  // History
+  history: Track[][]
+  historyIndex: number
+
+  // UI flags
+  isPromptOpen: boolean
+
+  // Actions
+  setPlayheadPosition: (frame: number) => void
+  setSelection: (selection: FrameRange | null) => void
+  setSelectedClip: (selection: SelectedClip | null) => void
+  setIsPlaying: (playing: boolean) => void
+
+  openPrompt: () => void
+  closePrompt: () => void
+
+  setProposedComposition: (tracks: Track[]) => void
+  acceptProposal: () => void
+  rejectProposal: () => void
+
+  hydrateProject: (project: HydratedProjectState) => void
+  commitHistoryCheckpoint: () => void
+
+  undo: () => void
+  redo: () => void
+
+  addTrack: (name: string, type: Track['type']) => string
+  addClip: (trackId: string, clip: Omit<Clip, 'id' | 'trackId'>) => void
+  removeClip: (trackId: string, clipId: string) => void
+  addClipFromAsset: (trackId: string, asset: AssetClipInput) => void
+  addAssetToTrackType: (trackType: Track['type'], asset: AssetClipInput) => void
+  splitClip: (trackId: string, clipId: string, splitFrame: number) => boolean
+  trimClip: (trackId: string, clipId: string, newStart: number, newEnd: number) => void
+  duplicateClip: (trackId: string, clipId: string) => void
+  markAssetMissing: (assetId: string) => void
+}
+
+const MIN_TOTAL_FRAMES = 150
+
+const createId = (prefix: string) => {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return `${prefix}-${crypto.randomUUID()}`
+  }
+
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+}
+
+const cloneTracks = (tracks: Track[]): Track[] =>
+  tracks.map((track) => ({
+    ...track,
+    clips: track.clips.map((clip) => ({ ...clip })),
+  }))
+
+const computeTotalFrames = (tracks: Track[]): number => {
+  const maxFrame = tracks.reduce((trackMax, track) => {
+    return track.clips.reduce((clipMax, clip) => Math.max(clipMax, clip.endFrame + 1), trackMax)
+  }, 0)
+
+  return Math.max(MIN_TOTAL_FRAMES, maxFrame)
+}
+
+const trackSignature = (tracks: Track[]) => JSON.stringify(tracks)
+
+const findClip = (tracks: Track[], selection: SelectedClip | null): Clip | null => {
+  if (!selection) return null
+
+  const track = tracks.find((item) => item.id === selection.trackId)
+  if (!track) return null
+
+  return track.clips.find((clip) => clip.id === selection.clipId) ?? null
+}
+
+const ensureSelectionExists = (tracks: Track[], selection: SelectedClip | null): SelectedClip | null =>
+  findClip(tracks, selection) ? selection : null
+
+const applyCommittedTree = (
+  state: EditorStore,
+  nextTree: Track[],
+  overrides: Partial<Pick<EditorStore, 'selectedClip' | 'totalFrames'>> = {}
+) => {
+  const snapshot = cloneTracks(nextTree)
+  const history = [...state.history.slice(0, state.historyIndex + 1), snapshot]
+
+  return {
+    compositionTree: snapshot,
+    proposedComposition: null,
+    history,
+    historyIndex: history.length - 1,
+    totalFrames: overrides.totalFrames ?? computeTotalFrames(snapshot),
+    selectedClip: ensureSelectionExists(snapshot, overrides.selectedClip ?? state.selectedClip),
+  }
+}
+
+const applyLiveTree = (
+  state: EditorStore,
+  nextTree: Track[],
+  overrides: Partial<Pick<EditorStore, 'selectedClip' | 'totalFrames'>> = {}
+) => {
+  const snapshot = cloneTracks(nextTree)
+
+  return {
+    compositionTree: snapshot,
+    proposedComposition: null,
+    totalFrames: overrides.totalFrames ?? computeTotalFrames(snapshot),
+    selectedClip: ensureSelectionExists(snapshot, overrides.selectedClip ?? state.selectedClip),
+  }
+}
+
+const resolveTrimmedClip = (clip: Clip, newStart: number, newEnd: number): Clip => {
+  let startFrame = Math.max(0, Math.min(newStart, newEnd))
+  let endFrame = Math.max(startFrame, newEnd)
+
+  if (
+    clip.mediaType &&
+    clip.mediaType !== 'text' &&
+    clip.mediaStart != null &&
+    clip.mediaEnd != null
+  ) {
+    const minStart = Math.max(0, clip.startFrame - clip.mediaStart)
+    startFrame = Math.max(minStart, Math.min(startFrame, endFrame))
+
+    let mediaStart = clip.mediaStart + (startFrame - clip.startFrame)
+
+    const maxEnd = clip.mediaDurationFrames != null
+      ? clip.endFrame + Math.max(clip.mediaDurationFrames - 1 - clip.mediaEnd, 0)
+      : Number.MAX_SAFE_INTEGER
+
+    endFrame = Math.max(startFrame, Math.min(endFrame, maxEnd))
+    let mediaEnd = clip.mediaEnd + (endFrame - clip.endFrame)
+
+    if (clip.mediaDurationFrames != null) {
+      mediaEnd = Math.min(mediaEnd, clip.mediaDurationFrames - 1)
+    }
+
+    mediaStart = Math.max(0, mediaStart)
+    mediaEnd = Math.max(mediaStart, mediaEnd)
+
+    return {
+      ...clip,
+      startFrame,
+      endFrame,
+      mediaStart,
+      mediaEnd,
+    }
+  }
+
+  return {
+    ...clip,
+    startFrame,
+    endFrame,
+  }
+}
+
+const INITIAL_TRACKS: Track[] = []
+
+const INITIAL_SNAPSHOT = cloneTracks(INITIAL_TRACKS)
+
+export const useEditorStore = create<EditorStore>((set, get) => ({
+  playheadPosition: 0,
+  currentSelection: null,
+  selectedClip: null,
+  isPlaying: false,
+  isPromptOpen: false,
+  totalFrames: computeTotalFrames(INITIAL_SNAPSHOT),
+  fps: 30,
+
+  compositionTree: INITIAL_SNAPSHOT,
+  proposedComposition: null,
+
+  history: [INITIAL_SNAPSHOT],
+  historyIndex: 0,
+
+  setPlayheadPosition: (frame) =>
+    set((state) => ({ playheadPosition: Math.max(0, Math.min(frame, state.totalFrames - 1)) })),
+
+  setSelection: (currentSelection) => set({ currentSelection }),
+  setSelectedClip: (selectedClip) => set({ selectedClip }),
+  setIsPlaying: (isPlaying) => set({ isPlaying }),
+
+  openPrompt: () => set({ isPromptOpen: true }),
+  closePrompt: () => set({ isPromptOpen: false }),
+
+  setProposedComposition: (tracks) => set({ proposedComposition: cloneTracks(tracks) }),
+
+  acceptProposal: () =>
+    set((state) => {
+      if (!state.proposedComposition) return state
+      return applyCommittedTree(state, state.proposedComposition)
+    }),
+
+  rejectProposal: () => set({ proposedComposition: null }),
+
+  hydrateProject: ({ tracks, totalFrames, fps }) =>
+    set(() => {
+      const snapshot = cloneTracks(tracks)
+
+      return {
+        compositionTree: snapshot,
+        proposedComposition: null,
+        history: [snapshot],
+        historyIndex: 0,
+        totalFrames: Math.max(totalFrames, computeTotalFrames(snapshot)),
+        fps,
+        playheadPosition: 0,
+        currentSelection: null,
+        selectedClip: null,
+        isPlaying: false,
+      }
+    }),
+
+  commitHistoryCheckpoint: () =>
+    set((state) => {
+      const current = trackSignature(state.compositionTree)
+      const historical = trackSignature(state.history[state.historyIndex] ?? [])
+
+      if (current === historical) {
+        return state
+      }
+
+      return applyCommittedTree(state, state.compositionTree)
+    }),
+
+  undo: () =>
+    set((state) => {
+      if (state.historyIndex <= 0) return state
+      const historyIndex = state.historyIndex - 1
+      const snapshot = cloneTracks(state.history[historyIndex])
+
+      return {
+        compositionTree: snapshot,
+        historyIndex,
+        proposedComposition: null,
+        totalFrames: computeTotalFrames(snapshot),
+        selectedClip: ensureSelectionExists(snapshot, state.selectedClip),
+      }
+    }),
+
+  redo: () =>
+    set((state) => {
+      if (state.historyIndex >= state.history.length - 1) return state
+      const historyIndex = state.historyIndex + 1
+      const snapshot = cloneTracks(state.history[historyIndex])
+
+      return {
+        compositionTree: snapshot,
+        historyIndex,
+        proposedComposition: null,
+        totalFrames: computeTotalFrames(snapshot),
+        selectedClip: ensureSelectionExists(snapshot, state.selectedClip),
+      }
+    }),
+
+  addTrack: (name, type) => {
+    const id = createId('track')
+
+    set((state) =>
+      applyCommittedTree(state, [...state.compositionTree, { id, name, type, clips: [] }], {
+        selectedClip: null,
+      })
+    )
+
+    return id
+  },
+
+  addClip: (trackId, clip) =>
+    set((state) =>
+      applyCommittedTree(
+        state,
+        state.compositionTree.map((track) =>
+          track.id === trackId
+            ? { ...track, clips: [...track.clips, { ...clip, id: createId('clip'), trackId }] }
+            : track
+        )
+      )
+    ),
+
+  removeClip: (trackId, clipId) =>
+    set((state) =>
+      applyCommittedTree(
+        state,
+        state.compositionTree.map((track) =>
+          track.id === trackId
+            ? { ...track, clips: track.clips.filter((clip) => clip.id !== clipId) }
+            : track
+        ),
+        {
+          selectedClip:
+            state.selectedClip?.trackId === trackId && state.selectedClip.clipId === clipId
+              ? null
+              : state.selectedClip,
+        }
+      )
+    ),
+
+  addClipFromAsset: (trackId, asset) =>
+    set((state) => {
+      const playhead = state.playheadPosition
+      const newClip: Clip = {
+        id: createId('clip'),
+        trackId,
+        startFrame: playhead,
+        endFrame: playhead + asset.durationFrames - 1,
+        label: asset.label,
+        color: asset.mediaType === 'video' ? '#e94560' : asset.mediaType === 'audio' ? '#059669' : '#7c3aed',
+        assetUrl: asset.assetUrl,
+        assetId: asset.assetId,
+        mediaType: asset.mediaType,
+        mediaStart: 0,
+        mediaEnd: asset.durationFrames - 1,
+        mediaDurationFrames: asset.durationFrames,
+        opacity: 1,
+        isMissingAsset: false,
+      }
+
+      const nextTree = state.compositionTree.map((track) =>
+        track.id === trackId ? { ...track, clips: [...track.clips, newClip] } : track
+      )
+
+      return applyCommittedTree(state, nextTree, {
+        totalFrames: Math.max(state.totalFrames, newClip.endFrame + 1),
+        selectedClip: { trackId, clipId: newClip.id },
+      })
+    }),
+
+  addAssetToTrackType: (trackType, asset) =>
+    set((state) => {
+      const existingTrack = state.compositionTree.find((track) => track.type === trackType)
+      const trackId = existingTrack?.id ?? createId('track')
+      const trackName = trackType === 'video' ? 'Video 1' : trackType === 'audio' ? 'Audio 1' : 'Overlay 1'
+
+      const playhead = state.playheadPosition
+      const newClip: Clip = {
+        id: createId('clip'),
+        trackId,
+        startFrame: playhead,
+        endFrame: playhead + asset.durationFrames - 1,
+        label: asset.label,
+        color: asset.mediaType === 'video' ? '#e94560' : asset.mediaType === 'audio' ? '#059669' : '#7c3aed',
+        assetUrl: asset.assetUrl,
+        assetId: asset.assetId,
+        mediaType: asset.mediaType,
+        mediaStart: 0,
+        mediaEnd: asset.durationFrames - 1,
+        mediaDurationFrames: asset.durationFrames,
+        opacity: 1,
+        isMissingAsset: false,
+      }
+
+      const nextTree = existingTrack
+        ? state.compositionTree.map((track) =>
+            track.id === trackId ? { ...track, clips: [...track.clips, newClip] } : track
+          )
+        : [
+            ...state.compositionTree,
+            {
+              id: trackId,
+              name: trackName,
+              type: trackType,
+              clips: [newClip],
+            },
+          ]
+
+      return applyCommittedTree(state, nextTree, {
+        totalFrames: Math.max(state.totalFrames, newClip.endFrame + 1),
+        selectedClip: { trackId, clipId: newClip.id },
+      })
+    }),
+
+  splitClip: (trackId, clipId, splitFrame) => {
+    const state = get()
+    const track = state.compositionTree.find((item) => item.id === trackId)
+    const clip = track?.clips.find((item) => item.id === clipId)
+
+    if (!clip || splitFrame <= clip.startFrame || splitFrame > clip.endFrame) {
+      return false
+    }
+
+    set((currentState) => {
+      let nextSelectedClipId: string | null = null
+      const nextTree = currentState.compositionTree.map((item) => {
+        if (item.id !== trackId) return item
+
+        const clipIndex = item.clips.findIndex((currentClip) => currentClip.id === clipId)
+        if (clipIndex === -1) return item
+
+        const originalClip = item.clips[clipIndex]
+        const mediaMid = originalClip.mediaStart != null
+          ? originalClip.mediaStart + (splitFrame - originalClip.startFrame)
+          : undefined
+
+        const leftClip: Clip = {
+          ...originalClip,
+          endFrame: splitFrame - 1,
+          mediaEnd: mediaMid != null ? mediaMid - 1 : originalClip.mediaEnd,
+        }
+
+        const rightClip: Clip = {
+          ...originalClip,
+          id: createId('clip'),
+          startFrame: splitFrame,
+          mediaStart: mediaMid ?? originalClip.mediaStart,
+        }
+        nextSelectedClipId = rightClip.id
+
+        const clips = [...item.clips]
+        clips.splice(clipIndex, 1, leftClip, rightClip)
+
+        return { ...item, clips }
+      })
+
+      return applyCommittedTree(currentState, nextTree, {
+        selectedClip: nextSelectedClipId ? { trackId, clipId: nextSelectedClipId } : currentState.selectedClip,
+      })
+    })
+
+    return true
+  },
+
+  trimClip: (trackId, clipId, newStart, newEnd) =>
+    set((state) =>
+      applyLiveTree(
+        state,
+        state.compositionTree.map((track) => {
+          if (track.id !== trackId) return track
+
+          return {
+            ...track,
+            clips: track.clips.map((clip) =>
+              clip.id === clipId ? resolveTrimmedClip(clip, newStart, newEnd) : clip
+            ),
+          }
+        }),
+        {
+          selectedClip: { trackId, clipId },
+        }
+      )
+    ),
+
+  duplicateClip: (trackId, clipId) =>
+    set((state) => {
+      let duplicatedClipId: string | null = null
+
+      const nextTree = state.compositionTree.map((track) => {
+        if (track.id !== trackId) return track
+
+        const clipIndex = track.clips.findIndex((clip) => clip.id === clipId)
+        if (clipIndex === -1) return track
+
+        const sourceClip = track.clips[clipIndex]
+        const duration = sourceClip.endFrame - sourceClip.startFrame
+        const duplicatedClip: Clip = {
+          ...sourceClip,
+          id: createId('clip'),
+          startFrame: sourceClip.endFrame + 1,
+          endFrame: sourceClip.endFrame + 1 + duration,
+        }
+        duplicatedClipId = duplicatedClip.id
+
+        const clips = [...track.clips]
+        clips.splice(clipIndex + 1, 0, duplicatedClip)
+
+        return { ...track, clips }
+      })
+
+      return applyCommittedTree(state, nextTree, {
+        selectedClip: duplicatedClipId ? { trackId, clipId: duplicatedClipId } : state.selectedClip,
+      })
+    }),
+
+  markAssetMissing: (assetId) =>
+    set((state) =>
+      applyLiveTree(
+        state,
+        state.compositionTree.map((track) => ({
+          ...track,
+          clips: track.clips.map((clip) =>
+            clip.assetId === assetId
+              ? {
+                  ...clip,
+                  assetUrl: undefined,
+                  isMissingAsset: true,
+                }
+              : clip
+          ),
+        }))
+      )
+    ),
+}))

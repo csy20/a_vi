@@ -1,0 +1,21 @@
+[package]
+name    = "avi-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "WASM pixel-processing utilities for the A-Vi video editor"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen          = "0.2"
+console_error_panic_hook = { version = "0.1", optional = true }
+
+[features]
+default = ["console_error_panic_hook"]
+
+# Release: maximise throughput, minimise .wasm size
+[profile.release]
+opt-level = 3
+lto       = true
+codegen-units = 1
