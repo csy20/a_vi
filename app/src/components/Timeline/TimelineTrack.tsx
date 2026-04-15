@@ -18,6 +18,9 @@ export const TimelineTrack: React.FC<Props> = ({
   onSelectClip,
   onTrimStart,
 }) => {
+  // FIX: BUG-B - hide missing clips from timeline rows so they no longer consume visual space.
+  const visibleClips = track.clips.filter((clip) => !clip.isMissingAsset && clip.status !== 'missing')
+
   return (
     <div
       style={{
@@ -30,7 +33,7 @@ export const TimelineTrack: React.FC<Props> = ({
         borderBottom: '1px solid #272727',
       }}
     >
-      {track.clips.map((clip) => (
+      {visibleClips.map((clip) => (
         <ClipBlock
           key={clip.id}
           clip={clip}

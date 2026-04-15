@@ -170,7 +170,7 @@ export const PromptModal: React.FC = () => {
           inset: 0,
           background: 'rgba(0,0,0,0.55)',
           backdropFilter: 'blur(2px)',
-          zIndex: 100,
+          zIndex: 40,
         }}
       />
 
@@ -187,7 +187,7 @@ export const PromptModal: React.FC = () => {
           border: '1px solid #333',
           borderRadius: 12,
           boxShadow: '0 24px 64px rgba(0,0,0,0.7)',
-          zIndex: 101,
+          zIndex: 50,
           overflow: 'hidden',
           display: 'flex',
           flexDirection: 'column',

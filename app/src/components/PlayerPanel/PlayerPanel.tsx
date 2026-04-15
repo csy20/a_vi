@@ -1,7 +1,9 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import { Player, type PlayerRef } from '@remotion/player'
 import { TrackPreviewComposition, type TrackPreviewProps } from '../../remotion/compositions/TrackPreviewComposition'
 import { useEditorStore } from '../../store/useEditorStore'
+import { getProjectAssets, type Asset } from '../../lib/assetService'
+import { toast } from '../../lib/toastStore'
 import { GhostPreviewBar } from './GhostPreviewBar'
 
 // ── Transport icon components ────────────────────────────────────────────────
@@ -156,11 +158,18 @@ const PlayerSlot: React.FC<PlayerSlotProps> = ({
   )
 }
 
+interface PlayerPanelProps {
+  projectId: string | null
+}
+
 // ── Main PlayerPanel ─────────────────────────────────────────────────────────
-export const PlayerPanel: React.FC = () => {
+export const PlayerPanel: React.FC<PlayerPanelProps> = ({ projectId }) => {
   const mainRef     = useRef<PlayerRef>(null)
   const proposedRef = useRef<PlayerRef>(null)
   const fromPlayer  = useRef(false)
+  const pickerRef = useRef<HTMLDivElement>(null)
+  const [pickerAssets, setPickerAssets] = useState<Asset[]>([])
+  const [isPickerAssetsLoading, setIsPickerAssetsLoading] = useState(false)
 
   const {
     playheadPosition,
@@ -169,9 +178,29 @@ export const PlayerPanel: React.FC = () => {
     isPlaying,
     compositionTree,
     proposedComposition,
+    assetPickerClip,
+    replaceClipAsset,
+    closeAssetPicker,
     setPlayheadPosition,
     setIsPlaying,
   } = useEditorStore()
+
+  const pickerClipData = useMemo(() => {
+    if (!assetPickerClip) return null
+    const track = compositionTree.find((item) => item.id === assetPickerClip.trackId)
+    return track?.clips.find((clip) => clip.id === assetPickerClip.clipId) ?? null
+  }, [assetPickerClip, compositionTree])
+
+  const pickerAssetOptions = useMemo(() => {
+    const readyAssets = pickerAssets.filter((asset) => asset.status === 'ready' && Boolean(asset.playback_url))
+    if (!pickerClipData) return readyAssets
+
+    if (pickerClipData.mediaType === 'video' || pickerClipData.mediaType === 'audio' || pickerClipData.mediaType === 'image') {
+      return readyAssets.filter((asset) => asset.file_type === pickerClipData.mediaType)
+    }
+
+    return readyAssets
+  }, [pickerAssets, pickerClipData])
 
   // ── Seek both players when store playheadPosition changes ─────────────────
   useEffect(() => {
@@ -217,6 +246,64 @@ export const PlayerPanel: React.FC = () => {
     }
   }, [setPlayheadPosition, setIsPlaying])
 
+  useEffect(() => {
+    if (!assetPickerClip || !projectId) {
+      setPickerAssets([])
+      setIsPickerAssetsLoading(false)
+      return
+    }
+
+    let cancelled = false
+    setIsPickerAssetsLoading(true)
+
+    getProjectAssets(projectId)
+      .then((assets) => {
+        if (cancelled) return
+        setPickerAssets(assets)
+      })
+      .catch((error) => {
+        if (cancelled) return
+        console.error('Failed to load assets for replacement picker:', error)
+        toast.error('Failed to load assets for replacement')
+      })
+      .finally(() => {
+        if (cancelled) return
+        setIsPickerAssetsLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [assetPickerClip, projectId])
+
+  useEffect(() => {
+    if (!assetPickerClip || pickerClipData) return
+    closeAssetPicker()
+  }, [assetPickerClip, closeAssetPicker, pickerClipData])
+
+  useEffect(() => {
+    if (!assetPickerClip) return
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        // FIX: BUG-A - allow Esc to always dismiss the asset replacement picker.
+        closeAssetPicker()
+      }
+    }
+
+    document.addEventListener('keydown', handleEscape)
+    return () => {
+      document.removeEventListener('keydown', handleEscape)
+    }
+  }, [assetPickerClip, closeAssetPicker])
+
+  useEffect(() => {
+    return () => {
+      // FIX: BUG-A - reset picker state if the player panel unmounts.
+      closeAssetPicker()
+    }
+  }, [closeAssetPicker])
+
   const goToStart  = () => { setIsPlaying(false); setPlayheadPosition(0) }
   const goToEnd    = () => { setIsPlaying(false); setPlayheadPosition(totalFrames - 1) }
   const togglePlay = () => setIsPlaying(!isPlaying)
@@ -231,6 +318,33 @@ export const PlayerPanel: React.FC = () => {
     setPlayheadPosition(Math.round(ratio * (totalFrames - 1)))
   }
 
+  const handlePreviewAreaMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!assetPickerClip) return
+    if (pickerRef.current && pickerRef.current.contains(event.target as Node)) return
+    // FIX: BUG-A - clicking the preview area dismisses the picker.
+    closeAssetPicker()
+  }
+
+  const handleReplaceClipAsset = useCallback((asset: Asset) => {
+    if (!assetPickerClip || !pickerClipData || !asset.playback_url) return
+
+    const fallbackDuration = pickerClipData.endFrame - pickerClipData.startFrame + 1
+    const durationFrames = asset.duration_seconds
+      ? Math.max(1, Math.round(asset.duration_seconds * fps))
+      : Math.max(1, fallbackDuration)
+
+    replaceClipAsset(assetPickerClip.trackId, assetPickerClip.clipId, {
+      assetUrl: asset.playback_url,
+      assetId: asset.id,
+      mediaType: asset.file_type,
+      label: asset.name,
+      durationFrames,
+    })
+
+    // FIX: BUG-A - selecting any asset from the picker always closes it.
+    closeAssetPicker()
+  }, [assetPickerClip, pickerClipData, fps, replaceClipAsset, closeAssetPicker])
+
   const isSplit = !!proposedComposition
 
   return (
@@ -241,10 +355,107 @@ export const PlayerPanel: React.FC = () => {
         flexDirection: 'column',
         background: '#111',
         overflow: 'hidden',
+        position: 'relative',
+        zIndex: 10,
       }}
     >
+      {assetPickerClip && (
+        <>
+          <div
+            // FIX: BUG-A - backdrop catches click-outside and keeps layering below active picker content.
+            onMouseDown={closeAssetPicker}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 40,
+              background: 'transparent',
+            }}
+          />
+
+          <div
+            ref={pickerRef}
+            style={{
+              position: 'fixed',
+              top: 86,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              width: 'min(420px, calc(100vw - 32px))',
+              background: '#1a1a1a',
+              border: '1px solid #2f2f2f',
+              borderRadius: 10,
+              boxShadow: '0 20px 50px rgba(0,0,0,0.5)',
+              zIndex: 50,
+              overflow: 'hidden',
+            }}
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div
+              style={{
+                padding: '10px 12px',
+                borderBottom: '1px solid #2a2a2a',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#b8b8b8', letterSpacing: 0.6 }}>
+                REPLACE CLIP ASSET
+              </span>
+              <span style={{ marginLeft: 'auto', fontSize: 11, color: '#666' }}>
+                {pickerClipData?.label ?? 'Selected clip'}
+              </span>
+              <button
+                onClick={closeAssetPicker}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#777',
+                  cursor: 'pointer',
+                  fontSize: 16,
+                  lineHeight: 1,
+                  padding: '0 2px',
+                }}
+                title="Close asset picker"
+              >
+                ×
+              </button>
+            </div>
+
+            <div style={{ maxHeight: 220, overflowY: 'auto', padding: 8 }}>
+              {isPickerAssetsLoading ? (
+                <div style={{ padding: '14px 10px', fontSize: 12, color: '#777' }}>Loading assets…</div>
+              ) : pickerAssetOptions.length === 0 ? (
+                <div style={{ padding: '14px 10px', fontSize: 12, color: '#777' }}>No matching assets available</div>
+              ) : (
+                pickerAssetOptions.map((asset) => (
+                  <button
+                    key={asset.id}
+                    onClick={() => handleReplaceClipAsset(asset)}
+                    style={{
+                      width: '100%',
+                      textAlign: 'left',
+                      padding: '8px 10px',
+                      borderRadius: 6,
+                      border: '1px solid #303030',
+                      background: '#202020',
+                      color: '#ddd',
+                      fontSize: 12,
+                      marginBottom: 6,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {asset.name}
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
       {/* ── Player area ── */}
       <div
+        onMouseDown={handlePreviewAreaMouseDown}
         style={{
           flex: 1,
           display: 'flex',

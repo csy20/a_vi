@@ -396,10 +396,10 @@ const App: React.FC = () => {
                 <AssetLibrary projectId={projectId} />
               </div>
             )}
-            <PlayerPanel />
+            <PlayerPanel projectId={projectId} />
           </div>
 
-          <div style={{ height: 230, flexShrink: 0 }}>
+          <div style={{ height: 230, flexShrink: 0, position: 'relative', zIndex: 20 }}>
             <Timeline />
           </div>
         </>
@@ -425,7 +425,7 @@ const App: React.FC = () => {
               inset: 0,
               background: 'rgba(0, 0, 0, 0.7)',
               backdropFilter: 'blur(4px)',
-              zIndex: 200,
+              zIndex: 40,
             }}
           />
           <div style={{
@@ -438,7 +438,7 @@ const App: React.FC = () => {
             borderRadius: 12,
             padding: '24px',
             minWidth: 320,
-            zIndex: 201,
+            zIndex: 50,
             boxShadow: '0 20px 60px rgba(0, 0, 0, 0.5)',
           }}>
             <h3 style={{ 

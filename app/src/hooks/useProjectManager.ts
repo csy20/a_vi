@@ -3,6 +3,7 @@ import { useEditorStore } from '../store/useEditorStore'
 import { useAuth } from '../lib/authContext'
 import { createProject, getProject, updateProjectComposition, createAutoSave } from '../lib/projectService'
 import { resolveTracksWithAssets } from '../lib/assetService'
+import { normalizeTimeline, repairTracks } from '../lib/clipValidation'
 import { toast } from '../lib/toastStore'
 
 export function useProjectManager() {
@@ -82,7 +83,11 @@ export function useProjectManager() {
       const resolvedTracks = await resolveTracksWithAssets(project.composition_tree || [], project.fps)
       if (cancelled.value) return
 
-      const missingCount = resolvedTracks
+      // FIX: 3 - repair and normalize reloaded timelines so playback and viewport restart at frame 0.
+      const repairedTimeline = repairTracks(resolvedTracks)
+      const normalizedTimeline = normalizeTimeline(repairedTimeline.tracks)
+
+      const missingCount = normalizedTimeline.tracks
         .flatMap((track) => track.clips)
         .filter((clip) => clip.assetId && clip.isMissingAsset)
         .length
@@ -91,8 +96,8 @@ export function useProjectManager() {
       setProjectId(project.id)
       skipNextSaveRef.current = true
       hydrateProject({
-        tracks: resolvedTracks,
-        totalFrames: project.total_frames,
+        tracks: normalizedTimeline.tracks,
+        totalFrames: Math.max(0, project.total_frames - normalizedTimeline.offsetFrames),
         fps: project.fps,
       })
       localStorage.setItem('currentProjectId', project.id)
@@ -100,7 +105,14 @@ export function useProjectManager() {
       setProjectStatus('ready')
 
       if (missingCount > 0) {
-        toast.warning(`${missingCount} media file${missingCount === 1 ? '' : 's'} missing from local storage`)
+        // FIX: 2 - prompt the user to re-upload any asset that is missing locally after reload.
+        toast.warning(`${missingCount} media file${missingCount === 1 ? '' : 's'} missing from local storage. Re-upload from Assets to restore playback.`)
+      }
+
+      if (repairedTimeline.removedCount > 0 || repairedTimeline.repairedCount > 0 || normalizedTimeline.offsetFrames !== 0) {
+        toast.info(
+          `Timeline repaired on load${normalizedTimeline.offsetFrames !== 0 ? ` and shifted by ${normalizedTimeline.offsetFrames} frame${normalizedTimeline.offsetFrames === 1 ? '' : 's'}` : ''}.`
+        )
       }
     } catch (error) {
       console.error('Project initialization failed:', error)

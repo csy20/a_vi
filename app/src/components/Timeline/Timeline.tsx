@@ -54,9 +54,12 @@ export const Timeline: React.FC = () => {
     currentSelection,
     selectedClip,
     playheadPosition,
+    timelineResetVersion,
     setPlayheadPosition,
     setSelection,
     setSelectedClip,
+    openAssetPicker,
+    closeAssetPicker,
     removeClip,
     duplicateClip,
     splitClip,
@@ -89,6 +92,12 @@ export const Timeline: React.FC = () => {
       endFrame: selectedClipData.endFrame,
     })
   }, [selectedClip, selectedClipData, setSelection])
+
+  useEffect(() => {
+    // FIX: 3 - reset the timeline viewport after project hydration so reloads start at frame 0.
+    if (!scrollRef.current) return
+    scrollRef.current.scrollLeft = 0
+  }, [timelineResetVersion])
 
   const clientXToFrame = useCallback(
     (clientX: number): number => {
@@ -143,8 +152,9 @@ export const Timeline: React.FC = () => {
     }
 
     removeClip(selectedClip.trackId, selectedClip.clipId)
+    closeAssetPicker()
     setSelection(null)
-  }, [removeClip, selectedClip, setSelection])
+  }, [closeAssetPicker, removeClip, selectedClip, setSelection])
 
   useEffect(() => {
     const onMouseMove = (event: MouseEvent) => {
@@ -213,6 +223,7 @@ export const Timeline: React.FC = () => {
     const frame = clientXToFrame(event.clientX)
     selDrag.current = { active: true, startFrame: frame, didSelect: false }
     setSelectedClip(null)
+    closeAssetPicker()
     setSelection(null)
     setPlayheadPosition(frame)
   }
@@ -231,6 +242,15 @@ export const Timeline: React.FC = () => {
   const handleSelectClip = (trackId: string, clipId: string, event: React.MouseEvent) => {
     event.stopPropagation()
     setSelectedClip({ trackId, clipId })
+    // FIX: BUG-A - open the replacement picker when a timeline media clip is selected.
+    const selected = compositionTree
+      .find((track) => track.id === trackId)
+      ?.clips.find((clip) => clip.id === clipId)
+    if (!selected || selected.mediaType === 'text') {
+      closeAssetPicker()
+      return
+    }
+    openAssetPicker({ trackId, clipId })
   }
 
   const handleTrimStart = (

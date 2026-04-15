@@ -20,6 +20,7 @@ export interface Clip {
   fontSize?: number
   fontColor?: string
   isMissingAsset?: boolean
+  status?: 'ready' | 'missing' | 'loading'
 }
 
 export interface Track {
@@ -73,6 +74,7 @@ interface EditorStore {
   // UI flags
   isPromptOpen: boolean
   timelineResetVersion: number
+  assetPickerClip: SelectedClip | null
 
   // Actions
   setPlayheadPosition: (frame: number) => void
@@ -98,9 +100,14 @@ interface EditorStore {
   removeClip: (trackId: string, clipId: string) => void
   addClipFromAsset: (trackId: string, asset: AssetClipInput) => void
   addAssetToTrackType: (trackType: Track['type'], asset: AssetClipInput) => void
+  replaceClipAsset: (trackId: string, clipId: string, asset: AssetClipInput) => void
   splitClip: (trackId: string, clipId: string, splitFrame: number) => boolean
   trimClip: (trackId: string, clipId: string, newStart: number, newEnd: number) => void
   duplicateClip: (trackId: string, clipId: string) => void
+  removeAssetClips: (assetId: string) => void
+  cleanMissingClips: () => void
+  openAssetPicker: (selection: SelectedClip) => void
+  closeAssetPicker: () => void
   markAssetMissing: (assetId: string) => void
 }
 
@@ -121,9 +128,17 @@ const cloneTracks = (tracks: Track[]): Track[] =>
     clips: track.clips.map((clip) => ({ ...clip })),
   }))
 
+const clipColorByMediaType = (mediaType: Clip['mediaType']) =>
+  mediaType === 'video' ? '#e94560' : mediaType === 'audio' ? '#059669' : '#7c3aed'
+
+const isMissingClip = (clip: Clip) => clip.isMissingAsset || clip.status === 'missing'
+
 const computeTotalFrames = (tracks: Track[]): number => {
   const maxFrame = tracks.reduce((trackMax, track) => {
-    return track.clips.reduce((clipMax, clip) => Math.max(clipMax, clip.endFrame + 1), trackMax)
+    // FIX: BUG-B - ignore missing clips so ghost placeholders cannot inflate timeline duration.
+    return track.clips.reduce((clipMax, clip) => (
+      isMissingClip(clip) ? clipMax : Math.max(clipMax, clip.endFrame + 1)
+    ), trackMax)
   }, 0)
 
   return Math.max(MIN_TOTAL_FRAMES, maxFrame)
@@ -146,7 +161,7 @@ const ensureSelectionExists = (tracks: Track[], selection: SelectedClip | null):
 const applyCommittedTree = (
   state: EditorStore,
   nextTree: Track[],
-  overrides: Partial<Pick<EditorStore, 'selectedClip' | 'totalFrames'>> = {}
+  overrides: Partial<Pick<EditorStore, 'selectedClip' | 'totalFrames' | 'assetPickerClip'>> = {}
 ) => {
   const snapshot = cloneTracks(nextTree)
   const history = [...state.history.slice(0, state.historyIndex + 1), snapshot].slice(-MAX_HISTORY)
@@ -158,13 +173,14 @@ const applyCommittedTree = (
     historyIndex: history.length - 1,
     totalFrames: overrides.totalFrames ?? computeTotalFrames(snapshot),
     selectedClip: ensureSelectionExists(snapshot, overrides.selectedClip ?? state.selectedClip),
+    assetPickerClip: ensureSelectionExists(snapshot, overrides.assetPickerClip ?? state.assetPickerClip),
   }
 }
 
 const applyLiveTree = (
   state: EditorStore,
   nextTree: Track[],
-  overrides: Partial<Pick<EditorStore, 'selectedClip' | 'totalFrames'>> = {}
+  overrides: Partial<Pick<EditorStore, 'selectedClip' | 'totalFrames' | 'assetPickerClip'>> = {}
 ) => {
   const snapshot = cloneTracks(nextTree)
 
@@ -173,6 +189,7 @@ const applyLiveTree = (
     proposedComposition: null,
     totalFrames: overrides.totalFrames ?? computeTotalFrames(snapshot),
     selectedClip: ensureSelectionExists(snapshot, overrides.selectedClip ?? state.selectedClip),
+    assetPickerClip: ensureSelectionExists(snapshot, overrides.assetPickerClip ?? state.assetPickerClip),
   }
 }
 
@@ -232,6 +249,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   isPlaying: false,
   isPromptOpen: false,
   timelineResetVersion: 0,
+  assetPickerClip: null,
   totalFrames: computeTotalFrames(INITIAL_SNAPSHOT),
   fps: 30,
 
@@ -245,8 +263,15 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     set((state) => ({ playheadPosition: Math.max(0, Math.min(frame, state.totalFrames - 1)) })),
 
   setSelection: (currentSelection) => set({ currentSelection }),
-  setSelectedClip: (selectedClip) => set({ selectedClip }),
+  setSelectedClip: (selectedClip) =>
+    set((state) => ({
+      selectedClip,
+      assetPickerClip: selectedClip ? state.assetPickerClip : null,
+    })),
   setIsPlaying: (isPlaying) => set({ isPlaying }),
+
+  openAssetPicker: (assetPickerClip) => set({ assetPickerClip }),
+  closeAssetPicker: () => set({ assetPickerClip: null }),
 
   openPrompt: () => set({ isPromptOpen: true }),
   closePrompt: () => set({ isPromptOpen: false }),
@@ -262,7 +287,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   rejectProposal: () => set({ proposedComposition: null }),
 
   hydrateProject: ({ tracks, totalFrames, fps }) =>
-    set(() => {
+    set((state) => {
       const snapshot = cloneTracks(tracks)
 
       return {
@@ -276,7 +301,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         currentSelection: null,
         selectedClip: null,
         isPlaying: false,
-        timelineResetVersion: 0,
+        timelineResetVersion: state.timelineResetVersion + 1,
+        assetPickerClip: null,
       }
     }),
 
@@ -304,6 +330,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         proposedComposition: null,
         totalFrames: computeTotalFrames(snapshot),
         selectedClip: ensureSelectionExists(snapshot, state.selectedClip),
+        assetPickerClip: ensureSelectionExists(snapshot, state.assetPickerClip),
       }
     }),
 
@@ -319,6 +346,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         proposedComposition: null,
         totalFrames: computeTotalFrames(snapshot),
         selectedClip: ensureSelectionExists(snapshot, state.selectedClip),
+        assetPickerClip: ensureSelectionExists(snapshot, state.assetPickerClip),
       }
     }),
 
@@ -360,6 +388,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
             state.selectedClip?.trackId === trackId && state.selectedClip.clipId === clipId
               ? null
               : state.selectedClip,
+          assetPickerClip:
+            state.assetPickerClip?.trackId === trackId && state.assetPickerClip.clipId === clipId
+              ? null
+              : state.assetPickerClip,
         }
       )
     ),
@@ -373,7 +405,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         startFrame: playhead,
         endFrame: playhead + asset.durationFrames - 1,
         label: asset.label,
-        color: asset.mediaType === 'video' ? '#e94560' : asset.mediaType === 'audio' ? '#059669' : '#7c3aed',
+        color: clipColorByMediaType(asset.mediaType),
         assetUrl: asset.assetUrl,
         assetId: asset.assetId,
         mediaType: asset.mediaType,
@@ -382,6 +414,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         mediaDurationFrames: asset.durationFrames,
         opacity: 1,
         isMissingAsset: false,
+        status: 'ready',
       }
 
       const nextTree = state.compositionTree.map((track) =>
@@ -407,7 +440,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         startFrame: playhead,
         endFrame: playhead + asset.durationFrames - 1,
         label: asset.label,
-        color: asset.mediaType === 'video' ? '#e94560' : asset.mediaType === 'audio' ? '#059669' : '#7c3aed',
+        color: clipColorByMediaType(asset.mediaType),
         assetUrl: asset.assetUrl,
         assetId: asset.assetId,
         mediaType: asset.mediaType,
@@ -416,6 +449,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         mediaDurationFrames: asset.durationFrames,
         opacity: 1,
         isMissingAsset: false,
+        status: 'ready',
       }
 
       const nextTree = existingTrack
@@ -435,6 +469,41 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       return applyCommittedTree(state, nextTree, {
         totalFrames: Math.max(state.totalFrames, newClip.endFrame + 1),
         selectedClip: { trackId, clipId: newClip.id },
+      })
+    }),
+
+  replaceClipAsset: (trackId, clipId, asset) =>
+    set((state) => {
+      const safeAssetDurationFrames = Math.max(1, Math.floor(asset.durationFrames))
+      const nextTree = state.compositionTree.map((track) => {
+        if (track.id !== trackId) return track
+
+        return {
+          ...track,
+          clips: track.clips.map((clip) => {
+            if (clip.id !== clipId) return clip
+            const timelineDurationFrames = clip.endFrame - clip.startFrame + 1
+
+            return {
+              ...clip,
+              label: asset.label,
+              color: clipColorByMediaType(asset.mediaType),
+              assetUrl: asset.assetUrl,
+              assetId: asset.assetId,
+              mediaType: asset.mediaType,
+              mediaStart: 0,
+              mediaEnd: Math.max(0, Math.min(timelineDurationFrames, safeAssetDurationFrames) - 1),
+              mediaDurationFrames: safeAssetDurationFrames,
+              isMissingAsset: false,
+              status: 'ready',
+            }
+          }),
+        }
+      })
+
+      return applyCommittedTree(state, nextTree, {
+        selectedClip: { trackId, clipId },
+        assetPickerClip: null,
       })
     }),
 
@@ -567,6 +636,38 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       })
     }),
 
+  removeAssetClips: (assetId) =>
+    set((state) => {
+      const hasReferencedClips = state.compositionTree.some((track) =>
+        track.clips.some((clip) => clip.assetId === assetId)
+      )
+      if (!hasReferencedClips) return state
+
+      // FIX: BUG-B - deleting an asset should immediately remove all linked timeline clips.
+      const nextTree = state.compositionTree.map((track) => ({
+        ...track,
+        clips: track.clips.filter((clip) => clip.assetId !== assetId),
+      }))
+
+      return applyCommittedTree(state, nextTree)
+    }),
+
+  cleanMissingClips: () =>
+    set((state) => {
+      const hasMissingClips = state.compositionTree.some((track) =>
+        track.clips.some((clip) => isMissingClip(clip))
+      )
+      if (!hasMissingClips) return state
+
+      // FIX: BUG-B - strip missing clips from every track so ghost clips cannot affect layout or duration.
+      const nextTree = state.compositionTree.map((track) => ({
+        ...track,
+        clips: track.clips.filter((clip) => !isMissingClip(clip)),
+      }))
+
+      return applyCommittedTree(state, nextTree)
+    }),
+
   markAssetMissing: (assetId) =>
     set((state) =>
       applyLiveTree(
@@ -579,6 +680,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
                   ...clip,
                   assetUrl: undefined,
                   isMissingAsset: true,
+                  status: 'missing',
                 }
               : clip
           ),
