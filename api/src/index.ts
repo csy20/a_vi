@@ -10,11 +10,12 @@ dotenv.config()
 
 const app = express()
 const PORT = process.env.PORT || 4000
+const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173'
 const promptLimiter = rateLimit({ windowMs: 60_000, max: 10, standardHeaders: true })
 const requireAuth = buildRequireAuth()
 
 // Middleware
-app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:3000' }))
+app.use(cors({ origin: corsOrigin, credentials: true }))
 app.use(express.json({ limit: '2mb' }))
 
 // Health check

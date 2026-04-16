@@ -107,6 +107,19 @@ const CompositionSchema = z.object({
   fps: z.number().positive(),
 })
 
+function isValidComposition(data: unknown): data is { tracks: Track[] } {
+  if (!data || typeof data !== 'object') return false
+  const d = data as Record<string, unknown>
+  if (!Array.isArray(d.tracks)) return false
+  return d.tracks.every(
+    (t) =>
+      t &&
+      typeof t === 'object' &&
+      typeof (t as Record<string, unknown>).id === 'string' &&
+      Array.isArray((t as Record<string, unknown>).clips)
+  )
+}
+
 // ── Gemini API Integration ────────────────────────────────────────────────────
 function getGeminiApiKey(): string {
   const geminiApiKey = process.env.GEMINI_API_KEY
@@ -398,22 +411,26 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
 
     try {
       const cleanedResponse = geminiResponse.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
-      const parsedResponse = JSON.parse(cleanedResponse)
+      const parsedResponse = JSON.parse(cleanedResponse) as unknown
+
+      if (!isValidComposition(parsedResponse)) {
+        res.status(422).json({ error: 'AI returned unexpected composition format' })
+        return
+      }
+
       const validation = CompositionSchema.safeParse(parsedResponse)
 
       if (!validation.success) {
-        console.warn('Gemini response failed schema validation, falling back to mock LLM', validation.error.flatten())
-        const fallback = buildFallbackComposition(body)
-        explanation = `${fallback.explanation} (Gemini response failed validation; using fallback mode)`
-        modifiedComposition = fallback.modifiedComposition
-      } else {
-        modifiedComposition = validation.data
+        console.warn('Gemini response failed schema validation', validation.error.flatten())
+        res.status(422).json({ error: 'AI returned unexpected composition format' })
+        return
       }
+
+      modifiedComposition = validation.data
     } catch (parseError) {
-      console.warn('Failed to parse Gemini response, falling back to mock LLM', parseError)
-      const fallback = buildFallbackComposition(body)
-      explanation = `${fallback.explanation} (using fallback mode)`
-      modifiedComposition = fallback.modifiedComposition
+      console.warn('Failed to parse Gemini response', parseError)
+      res.status(422).json({ error: 'AI returned unexpected composition format' })
+      return
     }
 
     res.json({

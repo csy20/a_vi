@@ -119,6 +119,9 @@ export const PromptModal: React.FC = () => {
 
       if (!res.ok) {
         const errorPayload = await res.json().catch(() => null) as { error?: string } | null
+        if (res.status === 422) {
+          throw new Error('AI response was malformed. Please try again.')
+        }
         throw new Error(errorPayload?.error || `API error ${res.status}`)
       }
 
@@ -136,7 +139,11 @@ export const PromptModal: React.FC = () => {
       const message = err instanceof Error ? err.message : 'Unknown error'
       setErrorMsg(message)
       setStatus('error')
-      toast.error('Failed to generate AI response')
+      if (message === 'AI response was malformed. Please try again.') {
+        toast.error('AI response was malformed. Please try again.')
+      } else {
+        toast.error('Failed to generate AI response')
+      }
     }
   }, [prompt, status, currentSelection, compositionTree, totalFrames, fps, canUseAi, session])
 

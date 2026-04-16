@@ -11,7 +11,6 @@ interface AssetUploadProps {
 export const AssetUpload: React.FC<AssetUploadProps> = ({ onUploadComplete }) => {
   const { projectId } = useProjectManager()
   const [uploading, setUploading] = useState(false)
-  const [progress, setProgress] = useState(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -25,7 +24,6 @@ export const AssetUpload: React.FC<AssetUploadProps> = ({ onUploadComplete }) =>
     }
 
     setUploading(true)
-    setProgress(0)
 
     try {
       toast.info('Uploading asset...')
@@ -33,10 +31,8 @@ export const AssetUpload: React.FC<AssetUploadProps> = ({ onUploadComplete }) =>
       const asset = await uploadAsset({
         file,
         projectId: projectId || undefined,
-        onProgress: setProgress,
       })
 
-      setProgress(100)
       toast.success(`"${file.name}" uploaded successfully!`)
       
       if (onUploadComplete) {
@@ -47,7 +43,6 @@ export const AssetUpload: React.FC<AssetUploadProps> = ({ onUploadComplete }) =>
       toast.error('Failed to upload asset')
     } finally {
       setUploading(false)
-      setProgress(0)
       // Reset file input
       if (fileInputRef.current) {
         fileInputRef.current.value = ''
@@ -78,7 +73,7 @@ export const AssetUpload: React.FC<AssetUploadProps> = ({ onUploadComplete }) =>
         {uploading ? (
           <>
             <ButtonSpinner />
-            <span>Uploading... {progress}%</span>
+            <span>Uploading...</span>
           </>
         ) : (
           <>
@@ -89,14 +84,10 @@ export const AssetUpload: React.FC<AssetUploadProps> = ({ onUploadComplete }) =>
       </button>
 
       {uploading && (
-        <div style={styles.progressBar}>
-          <div
-            style={{
-              ...styles.progressFill,
-              width: `${progress}%`,
-            }}
-          />
-        </div>
+        <>
+          <style>{'@keyframes assetUploadShimmer { to { background-position: -200% center; } }'}</style>
+          <div style={styles.shimmer} />
+        </>
       )}
 
       <div style={styles.hint}>
@@ -127,17 +118,11 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 500,
     transition: 'all 0.2s',
   },
-  progressBar: {
-    width: '100%',
-    height: 4,
-    background: '#252525',
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  progressFill: {
-    height: '100%',
-    background: '#e94560',
-    transition: 'width 0.3s ease',
+  shimmer: {
+    height: 3,
+    background: 'linear-gradient(90deg, transparent 0%, #e94560 50%, transparent 100%)',
+    backgroundSize: '200%',
+    animation: 'assetUploadShimmer 1.2s linear infinite',
   },
   hint: {
     fontSize: 11,

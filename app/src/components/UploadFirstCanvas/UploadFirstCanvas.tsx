@@ -36,7 +36,6 @@ export const UploadFirstCanvas: React.FC<UploadFirstCanvasProps> = ({
 
   const [isDragging, setIsDragging] = useState(false)
   const [uploading, setUploading] = useState(false)
-  const [uploadProgress, setUploadProgress] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const canUpload = projectStatus === 'ready' && !uploading
@@ -44,9 +43,9 @@ export const UploadFirstCanvas: React.FC<UploadFirstCanvasProps> = ({
   const helperText = useMemo(() => {
     if (projectStatus === 'loading') return 'Preparing your project...'
     if (projectStatus === 'error') return null
-    if (uploading) return `Uploading video... ${uploadProgress}%`
+    if (uploading) return 'Uploading video...'
     return 'Upload an MP4, MOV, or WebM video to start editing'
-  }, [projectStatus, uploadProgress, uploading])
+  }, [projectStatus, uploading])
 
   const ingestVideo = async (file: File) => {
     if (!projectId) {
@@ -65,13 +64,11 @@ export const UploadFirstCanvas: React.FC<UploadFirstCanvasProps> = ({
     }
 
     setUploading(true)
-    setUploadProgress(0)
 
     try {
       const asset = await uploadAsset({
         file,
         projectId,
-        onProgress: setUploadProgress,
       })
 
       const durationFrames = asset.duration_seconds
@@ -92,7 +89,6 @@ export const UploadFirstCanvas: React.FC<UploadFirstCanvasProps> = ({
       toast.error(error instanceof Error ? error.message : 'Failed to upload your video')
     } finally {
       setUploading(false)
-      setUploadProgress(0)
       if (inputRef.current) inputRef.current.value = ''
     }
   }
@@ -289,7 +285,7 @@ export const UploadFirstCanvas: React.FC<UploadFirstCanvasProps> = ({
                   boxShadow: canUpload ? '0 14px 30px rgba(233,69,96,0.28)' : 'none',
                 }}
               >
-                {uploading ? `Uploading ${uploadProgress}%` : 'Choose Video'}
+                {uploading ? 'Uploading...' : 'Choose Video'}
               </button>
             </>
           )}

@@ -33,7 +33,6 @@ export const AssetLibrary: React.FC<AssetLibraryProps> = ({ projectId }) => {
   const [assets, setAssets] = useState<Asset[]>([])
   const [loading, setLoading] = useState(false)
   const [uploading, setUploading] = useState(false)
-  const [uploadProgress, setUploadProgress] = useState(0)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -89,14 +88,12 @@ export const AssetLibrary: React.FC<AssetLibraryProps> = ({ projectId }) => {
     }
 
     setUploading(true)
-    setUploadProgress(0)
     toast.info(`Uploading ${file.name}...`)
 
     try {
       const asset = await uploadAsset({
         file,
         projectId,
-        onProgress: (progress) => setUploadProgress(progress),
       })
 
       setAssets((prev) => [asset, ...prev])
@@ -106,7 +103,6 @@ export const AssetLibrary: React.FC<AssetLibraryProps> = ({ projectId }) => {
       toast.error(err instanceof Error ? err.message : 'Failed to upload file. Please try again.')
     } finally {
       setUploading(false)
-      setUploadProgress(0)
     }
   }
 
@@ -206,7 +202,7 @@ export const AssetLibrary: React.FC<AssetLibraryProps> = ({ projectId }) => {
             opacity: uploading ? 0.5 : 1,
           }}
         >
-          {uploading ? `Uploading ${uploadProgress}%` : '+ Upload'}
+          {uploading ? 'Uploading...' : '+ Upload'}
         </button>
         <input
           ref={fileInputRef}

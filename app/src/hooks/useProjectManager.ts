@@ -19,14 +19,20 @@ export function useProjectManager() {
   const [projectError, setProjectError] = useState<string | null>(null)
   const autoSaveRef = useRef(createAutoSave(3000))
   const isInitializingRef = useRef(false)
+  const isInitialized = useRef(false)
   const initInFlightRef = useRef(false)
-  const skipNextSaveRef = useRef(false)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
+
+  const updateProjectId = useCallback((id: string) => {
+    projectIdRef.current = id
+    setProjectId(id)
+  }, [])
 
   const initializeProject = useCallback(async (cancelled: { value: boolean }) => {
     if (initInFlightRef.current) return
     initInFlightRef.current = true
     isInitializingRef.current = true
+    isInitialized.current = false
     setProjectStatus('loading')
     setProjectError(null)
 
@@ -49,11 +55,11 @@ export function useProjectManager() {
 
       if (cancelled.value) return
 
-      projectIdRef.current = project.id
-      setProjectId(project.id)
+      updateProjectId(project.id)
       localStorage.setItem('currentProjectId', project.id)
       setHasUnsavedChanges(false)
       setProjectStatus('ready')
+      isInitialized.current = true
     }
 
     try {
@@ -92,9 +98,7 @@ export function useProjectManager() {
         .filter((clip) => clip.assetId && clip.isMissingAsset)
         .length
 
-      projectIdRef.current = project.id
-      setProjectId(project.id)
-      skipNextSaveRef.current = true
+      updateProjectId(project.id)
       hydrateProject({
         tracks: normalizedTimeline.tracks,
         totalFrames: Math.max(0, project.total_frames - normalizedTimeline.offsetFrames),
@@ -131,7 +135,7 @@ export function useProjectManager() {
         isInitializingRef.current = false
       }
     }
-  }, [user, hydrateProject])
+  }, [user, hydrateProject, updateProjectId])
 
   useEffect(() => {
     if (!user || authLoading) return
@@ -154,9 +158,8 @@ export function useProjectManager() {
   useEffect(() => {
     if (!user || !projectIdRef.current || isInitializingRef.current) return
 
-    if (skipNextSaveRef.current) {
-      skipNextSaveRef.current = false
-      setHasUnsavedChanges(false)
+    if (!isInitialized.current) {
+      isInitialized.current = true
       return
     }
 
@@ -177,6 +180,7 @@ export function useProjectManager() {
     if (!projectIdRef.current || !user) return
 
     await autoSaveRef.current.flush()
+    setHasUnsavedChanges(false)
   }, [user])
 
   useEffect(() => {

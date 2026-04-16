@@ -93,18 +93,13 @@ const App: React.FC = () => {
   }
 
   const handleSave = async () => {
-    if (!projectId) {
-      toast.warning('No project to save')
-      return
-    }
-    
     toast.info('Saving project...')
     try {
       await forceSave()
-      toast.success('Project saved successfully!')
-    } catch (error) {
-      console.error('Save failed:', error)
-      toast.error('Failed to save project. Please try again.')
+      toast.success('Project saved!')
+    } catch (err) {
+      toast.error('Save failed. Please try again.')
+      console.error('Save error:', err)
     }
   }
 
@@ -215,10 +210,10 @@ const App: React.FC = () => {
                 display: 'flex',
                 alignItems: 'center',
                 gap: 6,
-                background: '#252525',
-                border: '1px solid #333',
+                background: hasUnsavedChanges ? '#252525' : '#1f1f1f',
+                border: hasUnsavedChanges ? '1px solid #333' : '1px solid #2a2a2a',
                 borderRadius: 6,
-                color: '#aaa',
+                color: hasUnsavedChanges ? '#aaa' : '#666',
                 fontSize: 12,
                 padding: '6px 12px',
                 cursor: 'pointer',
@@ -226,7 +221,7 @@ const App: React.FC = () => {
               }}
             >
               <span>💾</span>
-              Save
+              {hasUnsavedChanges ? 'Save •' : 'Saved'}
             </button>
             <button
               onClick={handleExport}

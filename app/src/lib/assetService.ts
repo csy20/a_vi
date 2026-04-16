@@ -36,7 +36,6 @@ interface StoredAssetRecord {
 export interface UploadAssetOptions {
   file: File
   projectId?: string
-  onProgress?: (progress: number) => void
 }
 
 const DB_NAME = 'avi-local-assets'
@@ -199,21 +198,17 @@ const resolveAssetPlaybackUrl = async (record: StoredAssetRecord): Promise<strin
 export async function uploadAsset({
   file,
   projectId,
-  onProgress,
 }: UploadAssetOptions): Promise<Asset> {
   if (!projectId) {
     throw new Error('Project must be initialized before uploading assets')
   }
 
   const fileType = detectFileType(file)
-  onProgress?.(15)
 
   const [{ durationSeconds, width, height }, thumbnailUrl] = await Promise.all([
     detectMediaMetadata(file, fileType),
     fileType === 'video' ? generateVideoThumbnail(file) : Promise.resolve(null),
   ])
-
-  onProgress?.(65)
 
   const assetId = createAssetId()
   const playbackUrl = await saveMediaBlob(assetId, file)
@@ -240,7 +235,6 @@ export async function uploadAsset({
     throw error
   }
 
-  onProgress?.(100)
   return toAsset(record, playbackUrl)
 }
 
@@ -263,12 +257,12 @@ export async function getProjectAssets(projectId: string): Promise<Asset[]> {
 }
 
 export async function deleteAsset(assetId: string): Promise<void> {
+  await deleteMediaBlob(assetId)
+
   const database = await getDatabase()
   const transaction = database.transaction(STORE_NAME, 'readwrite')
   transaction.objectStore(STORE_NAME).delete(assetId)
   await transactionToPromise(transaction)
-
-  await deleteMediaBlob(assetId)
 }
 
 export async function deleteProjectAssets(projectId: string): Promise<void> {
