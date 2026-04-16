@@ -12,6 +12,22 @@ const IconPause     = () => <svg width="14" height="14" viewBox="0 0 24 24" fill
 const IconSkipBack  = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
 const IconSkipFwd   = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zm2.5-6L14 7v10z"/><path d="M16 6h2v12h-2z"/></svg>
 
+const getActiveClipLabels = (
+  tracks: TrackPreviewProps['tracks'],
+  frame: number
+): string[] =>
+  Array.from(
+    new Set(
+      tracks
+        .flatMap((track) =>
+          track.clips
+            .filter((clip) => frame >= clip.startFrame && frame <= clip.endFrame)
+            .map((clip) => clip.label.trim())
+        )
+        .filter((label) => label.length > 0)
+    )
+  ).slice(0, 3)
+
 // ── One player slot ──────────────────────────────────────────────────────────
 interface PlayerSlotProps {
   playerRef:    React.RefObject<PlayerRef | null>
@@ -20,6 +36,7 @@ interface PlayerSlotProps {
   fps:          number
   label:        string
   isProposed?:  boolean
+  activeClipLabels?: string[]
 }
 
 const formatPreviewError = (error: Error) => {
@@ -102,7 +119,7 @@ const PreviewErrorState: React.FC<{ error: Error; label: string; isProposed: boo
 )
 
 const PlayerSlot: React.FC<PlayerSlotProps> = ({
-  playerRef, tracks, totalFrames, fps, label, isProposed = false,
+  playerRef, tracks, totalFrames, fps, label, isProposed = false, activeClipLabels = [],
 }) => {
   return (
     <div
@@ -142,7 +159,7 @@ const PlayerSlot: React.FC<PlayerSlotProps> = ({
         <Player
           ref={playerRef as React.RefObject<PlayerRef>}
           component={TrackPreviewComposition as unknown as React.ComponentType<Record<string, unknown>>}
-          inputProps={{ tracks, totalFrames, label, isProposed } satisfies TrackPreviewProps}
+          inputProps={{ tracks, totalFrames, isProposed } satisfies TrackPreviewProps}
           durationInFrames={totalFrames}
           compositionWidth={1280}
           compositionHeight={720}
@@ -153,6 +170,40 @@ const PlayerSlot: React.FC<PlayerSlotProps> = ({
           )}
           style={{ width: '100%', height: '100%', display: 'block' }}
         />
+        {activeClipLabels.length > 0 && (
+          <div
+            style={{
+              position: 'absolute',
+              left: 8,
+              bottom: 8,
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 6,
+              pointerEvents: 'none',
+              maxWidth: 'calc(100% - 16px)',
+            }}
+          >
+            {activeClipLabels.map((clipLabel) => (
+              <span
+                key={clipLabel}
+                style={{
+                  fontSize: 10,
+                  color: '#e5e7eb',
+                  background: 'rgba(15,15,15,0.74)',
+                  border: '1px solid rgba(99,99,99,0.45)',
+                  borderRadius: 4,
+                  padding: '3px 7px',
+                  fontFamily: 'monospace',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {clipLabel}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -170,6 +221,7 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({ projectId }) => {
   const pickerRef = useRef<HTMLDivElement>(null)
   const [pickerAssets, setPickerAssets] = useState<Asset[]>([])
   const [isPickerAssetsLoading, setIsPickerAssetsLoading] = useState(false)
+  const [comparisonMode, setComparisonMode] = useState(false)
 
   const {
     playheadPosition,
@@ -202,23 +254,45 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({ projectId }) => {
     return readyAssets
   }, [pickerAssets, pickerClipData])
 
+  useEffect(() => {
+    if (!proposedComposition) {
+      setComparisonMode(false)
+    }
+  }, [proposedComposition])
+
+  const originalClipLabels = useMemo(
+    () => getActiveClipLabels(compositionTree, playheadPosition),
+    [compositionTree, playheadPosition]
+  )
+  const proposedClipLabels = useMemo(
+    () => (proposedComposition ? getActiveClipLabels(proposedComposition, playheadPosition) : []),
+    [proposedComposition, playheadPosition]
+  )
+
+  const hasComparisonSource = Boolean(proposedComposition)
+  const isSplit = hasComparisonSource && comparisonMode
+
   // ── Seek both players when store playheadPosition changes ─────────────────
   useEffect(() => {
     if (fromPlayer.current) { fromPlayer.current = false; return }
     mainRef.current?.seekTo(playheadPosition)
-    proposedRef.current?.seekTo(playheadPosition)
-  }, [playheadPosition])
+    if (isSplit) {
+      proposedRef.current?.seekTo(playheadPosition)
+    }
+  }, [playheadPosition, isSplit])
 
   // ── Play / pause both players ─────────────────────────────────────────────
   useEffect(() => {
     if (isPlaying) {
       mainRef.current?.play()
-      proposedRef.current?.play()
+      if (isSplit) {
+        proposedRef.current?.play()
+      }
     } else {
       mainRef.current?.pause()
       proposedRef.current?.pause()
     }
-  }, [isPlaying])
+  }, [isPlaying, isSplit])
 
   // ── Primary player timeupdate → update store + keep secondary in sync ─────
   useEffect(() => {
@@ -228,7 +302,9 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({ projectId }) => {
     const onTimeUpdate = ({ detail }: { detail: { frame: number } }) => {
       fromPlayer.current = true
       setPlayheadPosition(detail.frame)
-      proposedRef.current?.seekTo(detail.frame)   // keep secondary locked in
+      if (isSplit) {
+        proposedRef.current?.seekTo(detail.frame)   // keep secondary locked in
+      }
     }
     const onPlay  = () => setIsPlaying(true)
     const onPause = () => setIsPlaying(false)
@@ -244,7 +320,7 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({ projectId }) => {
       player.removeEventListener('pause', onPause)
       player.removeEventListener('ended', onEnded)
     }
-  }, [setPlayheadPosition, setIsPlaying])
+  }, [setPlayheadPosition, setIsPlaying, isSplit])
 
   useEffect(() => {
     if (!assetPickerClip || !projectId) {
@@ -344,8 +420,6 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({ projectId }) => {
     // FIX: BUG-A - selecting any asset from the picker always closes it.
     closeAssetPicker()
   }, [assetPickerClip, pickerClipData, fps, replaceClipAsset, closeAssetPicker])
-
-  const isSplit = !!proposedComposition
 
   return (
     <div
@@ -454,6 +528,35 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({ projectId }) => {
       )}
 
       {/* ── Player area ── */}
+      {hasComparisonSource && (
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            padding: '10px 16px 0',
+            flexShrink: 0,
+          }}
+        >
+          <button
+            onClick={() => setComparisonMode((enabled) => !enabled)}
+            style={{
+              borderRadius: 6,
+              border: comparisonMode ? '1px solid rgba(99,160,255,0.6)' : '1px solid #3a3a3a',
+              background: comparisonMode ? 'rgba(99,160,255,0.16)' : '#1f1f1f',
+              color: comparisonMode ? '#63a0ff' : '#bbb',
+              fontSize: 11,
+              fontFamily: 'monospace',
+              padding: '5px 10px',
+              cursor: 'pointer',
+              letterSpacing: 0.4,
+            }}
+            title="Toggle comparison split view"
+          >
+            {comparisonMode ? 'COMPARISON ON' : 'COMPARISON OFF'}
+          </button>
+        </div>
+      )}
+
       <div
         onMouseDown={handlePreviewAreaMouseDown}
         style={{
@@ -473,6 +576,7 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({ projectId }) => {
           fps={fps}
           label="ORIGINAL"
           isProposed={false}
+          activeClipLabels={originalClipLabels}
         />
 
         {/* AI Preview (only when proposedComposition is set) */}
@@ -484,6 +588,7 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({ projectId }) => {
             fps={fps}
             label="AI PREVIEW"
             isProposed
+            activeClipLabels={proposedClipLabels}
           />
         )}
       </div>

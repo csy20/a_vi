@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { PlayerPanel }  from './components/PlayerPanel/PlayerPanel'
+import { PreviewErrorBoundary } from './components/PlayerPanel/PreviewErrorBoundary'
 import { Timeline }     from './components/Timeline/Timeline'
 import { PromptModal }  from './components/PromptModal/PromptModal'
 import { WasmPanel }    from './components/WasmPanel/WasmPanel'
@@ -391,7 +392,9 @@ const App: React.FC = () => {
                 <AssetLibrary projectId={projectId} />
               </div>
             )}
-            <PlayerPanel projectId={projectId} />
+            <PreviewErrorBoundary>
+              <PlayerPanel projectId={projectId} />
+            </PreviewErrorBoundary>
           </div>
 
           <div style={{ height: 230, flexShrink: 0, position: 'relative', zIndex: 20 }}>

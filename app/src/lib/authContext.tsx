@@ -20,21 +20,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      setUser(session?.user ?? null)
+    let cancelled = false
+    const applySession = (nextSession: Session | null) => {
+      if (cancelled) return
+      setSession(nextSession)
+      setUser(nextSession?.user ?? null)
       setLoading(false)
-    })
+    }
+
+    const clearToLogin = (error: unknown) => {
+      console.error('Supabase auth session failed and was cleared:', error)
+      applySession(null)
+    }
+
+    // Get initial session
+    ;(async () => {
+      try {
+        const { data, error } = await supabase.auth.getSession()
+        if (error) {
+          clearToLogin(error)
+          return
+        }
+        applySession(data.session)
+      } catch (error) {
+        clearToLogin(error)
+      }
+    })()
 
     // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
-      setUser(session?.user ?? null)
-      setLoading(false)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      if (event === 'TOKEN_REFRESHED' && !nextSession) {
+        clearToLogin(new Error('Token refresh returned an empty session'))
+        return
+      }
+
+      applySession(nextSession)
     })
 
-    return () => subscription.unsubscribe()
+    return () => {
+      cancelled = true
+      subscription.unsubscribe()
+    }
   }, [])
 
   const signIn = async (email: string, password: string) => {
@@ -64,7 +90,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const signOut = async () => {
-    await supabase.auth.signOut()
+    const { error } = await supabase.auth.signOut()
+    if (error) throw error
   }
 
   const value = {

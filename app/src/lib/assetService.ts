@@ -41,6 +41,7 @@ export interface UploadAssetOptions {
 const DB_NAME = 'avi-local-assets'
 const DB_VERSION = 1
 const STORE_NAME = 'assets'
+const EXPORTED_FILE_NAME_PATTERN = /^a-vi-export-/i
 
 let dbPromise: Promise<IDBDatabase> | null = null
 
@@ -201,6 +202,10 @@ export async function uploadAsset({
 }: UploadAssetOptions): Promise<Asset> {
   if (!projectId) {
     throw new Error('Project must be initialized before uploading assets')
+  }
+
+  if (EXPORTED_FILE_NAME_PATTERN.test(file.name)) {
+    throw new Error('Exported files are excluded from source assets. Rename the file before importing.')
   }
 
   const fileType = detectFileType(file)
