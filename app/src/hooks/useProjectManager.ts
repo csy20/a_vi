@@ -45,8 +45,7 @@ export function useProjectManager() {
       return
     }
 
-    const createFreshProject = async () => {
-      const editorState = useEditorStore.getState()
+    const createFreshProject = async (editorState: { compositionTree: ReturnType<typeof useEditorStore.getState>['compositionTree']; totalFrames: number; fps: number }) => {
       const project = await createProject({
         composition_tree: editorState.compositionTree,
         total_frames: editorState.totalFrames,
@@ -66,7 +65,8 @@ export function useProjectManager() {
       const savedProjectId = localStorage.getItem('currentProjectId')
 
       if (!savedProjectId) {
-        await createFreshProject()
+        const editorState = useEditorStore.getState()
+        await createFreshProject({ compositionTree: editorState.compositionTree, totalFrames: editorState.totalFrames, fps: editorState.fps })
         return
       }
 
@@ -74,15 +74,16 @@ export function useProjectManager() {
       try {
         project = await getProject(savedProjectId)
       } catch {
-        // stale or invalid ID — clear and create fresh
         localStorage.removeItem('currentProjectId')
-        await createFreshProject()
+        const editorState = useEditorStore.getState()
+        await createFreshProject({ compositionTree: editorState.compositionTree, totalFrames: editorState.totalFrames, fps: editorState.fps })
         return
       }
 
       if (!project) {
         localStorage.removeItem('currentProjectId')
-        await createFreshProject()
+        const editorState = useEditorStore.getState()
+        await createFreshProject({ compositionTree: editorState.compositionTree, totalFrames: editorState.totalFrames, fps: editorState.fps })
         return
       }
 
@@ -181,6 +182,17 @@ export function useProjectManager() {
 
     await autoSaveRef.current.flush()
     setHasUnsavedChanges(false)
+  }, [user])
+
+  useEffect(() => {
+    const handleReconnect = () => {
+      if (projectIdRef.current && user) {
+        autoSaveRef.current.flush().catch(console.error)
+      }
+    }
+
+    window.addEventListener('avi:reconnect', handleReconnect)
+    return () => window.removeEventListener('avi:reconnect', handleReconnect)
   }, [user])
 
   useEffect(() => {

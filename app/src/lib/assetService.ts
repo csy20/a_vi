@@ -113,13 +113,24 @@ const detectFileType = (file: File): Asset['file_type'] => {
 }
 
 const detectMediaMetadata = (file: File, fileType: Asset['file_type']) =>
-  new Promise<{ durationSeconds: number | null; width: number | null; height: number | null }>((resolve) => {
+  new Promise<{ durationSeconds: number | null; width: number | null; height: number | null }>((resolve, _reject) => {
+    const TIMEOUT_MS = 15000
+    const timeoutId = setTimeout(() => {
+      URL.revokeObjectURL(objectUrl)
+      resolve({ durationSeconds: null, width: null, height: null })
+    }, TIMEOUT_MS)
+
+    const cleanup = () => {
+      clearTimeout(timeoutId)
+      URL.revokeObjectURL(objectUrl)
+    }
+
     if (fileType === 'image') {
       const image = new Image()
       const objectUrl = URL.createObjectURL(file)
 
       image.onload = () => {
-        URL.revokeObjectURL(objectUrl)
+        cleanup()
         resolve({
           durationSeconds: null,
           width: image.naturalWidth || null,
@@ -128,7 +139,7 @@ const detectMediaMetadata = (file: File, fileType: Asset['file_type']) =>
       }
 
       image.onerror = () => {
-        URL.revokeObjectURL(objectUrl)
+        cleanup()
         resolve({ durationSeconds: null, width: null, height: null })
       }
 
@@ -142,7 +153,7 @@ const detectMediaMetadata = (file: File, fileType: Asset['file_type']) =>
     media.preload = 'metadata'
     media.onloadedmetadata = () => {
       const durationSeconds = Number.isFinite(media.duration) ? media.duration : null
-      URL.revokeObjectURL(objectUrl)
+      cleanup()
       resolve({
         durationSeconds,
         width: fileType === 'video' ? (Number.isFinite((media as HTMLVideoElement).videoWidth) ? (media as HTMLVideoElement).videoWidth : null) : null,
@@ -151,7 +162,7 @@ const detectMediaMetadata = (file: File, fileType: Asset['file_type']) =>
     }
 
     media.onerror = () => {
-      URL.revokeObjectURL(objectUrl)
+      cleanup()
       resolve({ durationSeconds: null, width: null, height: null })
     }
 

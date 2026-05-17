@@ -107,6 +107,19 @@ const CompositionSchema = z.object({
   fps: z.number().positive(),
 })
 
+const RequestSchema = z.object({
+  prompt: z.string().min(1).max(2000),
+  frameRange: z.object({
+    startFrame: z.number().int().nonnegative(),
+    endFrame: z.number().int().nonnegative(),
+  }).nullable(),
+  compositionContext: z.object({
+    tracks: z.array(TrackSchema),
+    totalFrames: z.number().int().nonnegative(),
+    fps: z.number().positive(),
+  }),
+})
+
 function isValidComposition(data: unknown): data is { tracks: Track[] } {
   if (!data || typeof data !== 'object') return false
   const d = data as Record<string, unknown>
@@ -301,11 +314,10 @@ function mockLLM(body: PromptBody): { tracks: Track[]; explanation: string } {
     const textMatch = prompt.match(/(?:text|title)\s+["']([^"']+)["']/i)
     const text = textMatch?.[1] || 'Sample Text'
 
-    // Find or create overlay track
     let overlayTrack = modifiedTracks.find((t) => t.type === 'overlay')
     if (!overlayTrack) {
       overlayTrack = { id: `track-overlay-${randomUUID()}`, name: 'Overlay 1', type: 'overlay', clips: [] }
-      modifiedTracks.push(overlayTrack)
+      modifiedTracks = [...modifiedTracks, overlayTrack]
     }
 
     const newClip: Clip = {
@@ -321,7 +333,8 @@ function mockLLM(body: PromptBody): { tracks: Track[]; explanation: string } {
       fontColor: '#ffffff',
       opacity: 1,
     }
-    overlayTrack.clips.push(newClip)
+    overlayTrack = { ...overlayTrack, clips: [...overlayTrack.clips, newClip] }
+    modifiedTracks = modifiedTracks.map((t) => (t.id === overlayTrack!.id ? overlayTrack! : t))
     changes.push(`Added text overlay: "${text}"`)
   }
 
@@ -354,12 +367,19 @@ function buildFallbackComposition(body: PromptBody): { explanation: string; modi
 
 // ── POST /api/prompt ──────────────────────────────────────────────────────────
 router.post('/', async (req: Request, res: Response): Promise<void> => {
-  const body = req.body as PromptBody
+  const rawBody = req.body
 
-  if (!body.prompt || !body.compositionContext) {
-    res.status(400).json({ success: false, error: 'prompt and compositionContext are required' })
+  const parsed = RequestSchema.safeParse(rawBody)
+  if (!parsed.success) {
+    res.status(400).json({
+      success: false,
+      error: 'Invalid request body',
+      details: parsed.error.flatten(),
+    })
     return
   }
+
+  const body = parsed.data as PromptBody
 
   try {
     const rangeDesc = body.frameRange

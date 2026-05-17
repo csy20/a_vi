@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useEditorStore } from '../store/useEditorStore'
 import { hasUsableVideoClips } from '../lib/editorUtils'
 import { toast } from '../lib/toastStore'
@@ -12,7 +12,11 @@ export const useCommandK = () => {
   const isPromptOpen = useEditorStore((s) => s.isPromptOpen)
   const openPrompt   = useEditorStore((s) => s.openPrompt)
   const closePrompt  = useEditorStore((s) => s.closePrompt)
-  const compositionTree = useEditorStore((s) => s.compositionTree)
+  const compositionTreeRef = useRef(useEditorStore.getState().compositionTree)
+
+  useEffect(() => {
+    compositionTreeRef.current = useEditorStore.getState().compositionTree
+  })
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -20,7 +24,7 @@ export const useCommandK = () => {
 
       if (isTrigger) {
         e.preventDefault()
-        if (!hasUsableVideoClips(compositionTree)) {
+        if (!hasUsableVideoClips(compositionTreeRef.current)) {
           toast.info('Upload a video first, then AI can edit your timeline.')
           return
         }
@@ -36,5 +40,5 @@ export const useCommandK = () => {
 
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [compositionTree, isPromptOpen, openPrompt, closePrompt])
+  }, [isPromptOpen, openPrompt, closePrompt])
 }

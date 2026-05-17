@@ -495,7 +495,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
               mediaEnd: Math.max(0, Math.min(timelineDurationFrames, safeAssetDurationFrames) - 1),
               mediaDurationFrames: safeAssetDurationFrames,
               isMissingAsset: false,
-              status: 'ready',
+              status: 'ready' as const,
             }
           }),
         }

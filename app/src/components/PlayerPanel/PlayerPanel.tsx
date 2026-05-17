@@ -290,7 +290,9 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({ projectId }) => {
       }
     } else {
       mainRef.current?.pause()
-      proposedRef.current?.pause()
+      if (isSplit) {
+        proposedRef.current?.pause()
+      }
     }
   }, [isPlaying, isSplit])
 

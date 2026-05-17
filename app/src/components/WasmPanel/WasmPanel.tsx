@@ -226,5 +226,8 @@ export const WasmPanel: React.FC = () => {
 
 // ── Helper ────────────────────────────────────────────────────────────────────
 function parseStats(arr: Float32Array): LumaStats {
+  if (arr.length < 3) {
+    return { min: 0, max: 0, mean: 0 }
+  }
   return { min: arr[0], max: arr[1], mean: arr[2] }
 }

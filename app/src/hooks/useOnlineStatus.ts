@@ -15,12 +15,15 @@ export function useOnlineStatus() {
         offlineToastId = null
       }
       toast.success('Back online! Syncing changes...')
+
+      // Trigger auto-save flush via a custom event that useProjectManager listens to
+      window.dispatchEvent(new Event('avi:reconnect'))
     }
 
     const handleOffline = () => {
       setIsOnline(false)
       offlineToastId = 'offline-warning'
-      toast.warning('You are offline. Changes will be saved when you reconnect.', 0) // 0 = don't auto-remove
+      toast.warning('You are offline. Changes will be saved when you reconnect.', 0)
     }
 
     window.addEventListener('online', handleOnline)
